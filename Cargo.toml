@@ -1,0 +1,25 @@
+[package]
+name = "flick"
+version = "1.1.0"
+edition = "2024"
+
+[dependencies]
+dirs = "6.0.0"
+glow = "0.17.0"
+image = "0.25.10"
+jwalk = "0.8.1"
+libmpv2 = "6.0.0"
+rand = "0.10.1"
+rfd = "0.17.2"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.150"
+sha1 = "0.11.0"
+slint = "1.16.1"
+
+[build-dependencies]
+slint-build = "1.16.1"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true

@@ -1,0 +1,6 @@
+/target
+/dist
+/third_party
+/packaging/windows-dlls
+.DS_Store
+tmp

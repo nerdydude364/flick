@@ -1,0 +1,151 @@
+import { Theme } from "theme.slint";
+
+export component ImageViewer inherits Rectangle {
+    in property <image> current-image;
+    in property <bool> has-images: false;
+    // true: single fullscreen image (today's normal view). false: the
+    // multi-image grid below — same `subMode` distinction the property was
+    // originally plumbed through for for, just never rendered until now.
+    in property <bool> gallery-open: false;
+    in property <float> zoom-percent: 100;
+    in property <float> rotation-deg: 0;
+    // Click/double-click handling stays confined to this box (matches the
+    // video canvas's click layer, which also stops above the sidebar/bottom
+    // bars) — independent of this component's own width/height, which spans
+    // the full window so the image itself renders edge-to-edge like video.
+    in property <length> hit-width: self.width;
+    in property <length> hit-height: self.height;
+
+    // Grid view: a flat list of pre-loaded thumbnails (already in the active
+    // filtered/shuffled order) and the 0-based position of the currently
+    // showing image within that list (-1 if none), used only to outline the
+    // current cell and to scroll it into view when the grid opens.
+    in property <[image]> gallery-thumbnails: [];
+    in property <int> gallery-current-index: -1;
+
+    callback navigate(int);
+    callback open-images();
+    callback toggle-fullscreen();
+    callback toggle-playback();
+    callback gallery-item-clicked(int /* position within gallery-thumbnails */);
+
+    property <length> gallery-cell: 120px;
+    property <length> gallery-gap: 10px;
+    property <length> gallery-pad: 16px;
+    property <int> gallery-columns: max(1, Math.floor((hit-width - gallery-pad * 2 + gallery-gap) / (gallery-cell + gallery-gap)));
+    property <int> gallery-rows: gallery-thumbnails.length > 0 ? Math.floor((gallery-thumbnails.length - 1) / gallery-columns) + 1 : 0;
+    property <length> gallery-content-height: gallery-pad * 2 + gallery-rows * gallery-cell + max(0, gallery-rows - 1) * gallery-gap;
+    property <length> gallery-current-row-y: gallery-pad + Math.floor(max(0, gallery-current-index) / gallery-columns) * (gallery-cell + gallery-gap);
+
+    background: black;
+
+    if !has-images: Rectangle {
+        x: 0;
+        y: 0;
+        width: 100%;
+        height: 100%;
+        background: @radial-gradient(circle, #1a1c1f 0%, #000000 70%);
+
+        VerticalLayout {
+            alignment: center;
+            spacing: Theme.gap-sm;
+            Image {
+                source: @image-url("icons/image-file.svg");
+                width: 64px;
+                height: 64px;
+                colorize: Theme.muted-2;
+                opacity: 0.28;
+            }
+            Text {
+                text: "Drop images here or click Open Images";
+                color: Theme.muted-2;
+                font-size: 13px;
+                horizontal-alignment: center;
+            }
+        }
+
+        TouchArea {
+            x: 0;
+            y: 0;
+            width: hit-width;
+            height: hit-height;
+            clicked => { open-images(); }
+            double-clicked => { toggle-fullscreen(); }
+        }
+    }
+
+    if has-images && gallery-open: Rectangle {
+        x: 0;
+        y: 0;
+        width: 100%;
+        height: 100%;
+        clip: true;
+
+        Image {
+            x: 0;
+            y: 0;
+            width: 100%;
+            height: 100%;
+            source: current-image;
+            image-fit: contain;
+            transform-origin: { x: parent.width / 2, y: parent.height / 2 };
+            transform-scale: zoom-percent / 100;
+            transform-rotation: rotation-deg * 1deg;
+        }
+
+        TouchArea {
+            x: 0;
+            y: 0;
+            width: hit-width;
+            height: hit-height;
+            clicked => { toggle-playback(); }
+            double-clicked => { toggle-fullscreen(); }
+        }
+    }
+
+    if has-images && !gallery-open: grid := Flickable {
+        x: 0;
+        y: 0;
+        width: hit-width;
+        height: hit-height;
+        viewport-width: hit-width;
+        viewport-height: max(hit-height, gallery-content-height);
+
+        // Fires once per grid mount (i.e. each time gallery-open switches
+        // to false) — scrolls the currently-showing image's row into view
+        // rather than always starting back at the top of the queue.
+        init => {
+            if (gallery-current-index >= 0) {
+                self.viewport-y = -max(0px, min(
+                    gallery-content-height - hit-height,
+                    gallery-current-row-y - hit-height / 2 + gallery-cell / 2,
+                ));
+            }
+        }
+
+        for thumb[i] in gallery-thumbnails: Rectangle {
+            x: gallery-pad + Math.mod(i, gallery-columns) * (gallery-cell + gallery-gap);
+            y: gallery-pad + Math.floor(i / gallery-columns) * (gallery-cell + gallery-gap);
+            width: gallery-cell;
+            height: gallery-cell;
+            clip: true;
+            border-radius: Theme.radius-sm;
+            border-width: i == gallery-current-index ? 2px : 0px;
+            border-color: Theme.accent;
+            background: Theme.surface-3;
+
+            Image {
+                x: 0;
+                y: 0;
+                width: 100%;
+                height: 100%;
+                source: thumb;
+                image-fit: cover;
+            }
+
+            TouchArea {
+                clicked => { gallery-item-clicked(i); }
+            }
+        }
+    }
+}

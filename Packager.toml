@@ -1,0 +1,58 @@
+# cargo-packager config — see scripts/package-macos.sh for the macOS build,
+# which wraps `cargo packager` with the libmpv dylib-bundling step it can't
+# do on its own (its `frameworks` field is for .framework bundles, not the
+# plain .dylib Homebrew installs mpv as).
+before-packaging-command = "cargo build --release"
+# Must match the Cargo package name — without it, cargo-packager hits a bug
+# in its own config-name-resolution fallback that tries to `chdir` into the
+# config *file's* path instead of its directory, failing with ENOTDIR.
+name = "flick"
+product-name = "Flick"
+identifier = "co.flick.app"
+# release.yml overwrites this from Cargo.toml's [package].version before
+# packaging, so the two never drift in CI. Leaving it unset doesn't fall
+# back to the Cargo version (tried it: produces an empty
+# CFBundleShortVersionString and a timestamp placeholder instead) — so if
+# you run the package scripts locally, bump this by hand to match first.
+version = "1.0.0"
+description = "Lightweight custom video and image player"
+authors = ["Nerdy Dude"]
+publisher = "Nerdy Dude"
+icons = ["assets/icon-512.png", "assets/icon-256.png", "assets/icon-128.png"]
+# Staged by scripts/package-windows.sh before NSIS packaging; empty glob is fine
+# on macOS/Linux where this directory has no files.
+resources = ["packaging/windows-dlls/*.dll"]
+category = "Video"
+out-dir = "dist"
+binaries-dir = "target/release"
+binaries = [{ path = "flick", main = true }]
+
+[macos]
+minimum-system-version = "11.0"
+
+[deb]
+# Debian/Ubuntu package name for libmpv's runtime library (Debian 12+/Ubuntu 22.04+).
+depends = ["libmpv2"]
+
+[nsis]
+install-mode = "both"
+
+[appimage]
+# linuxdeploy follows the binary's own ELF dependencies automatically for
+# most things; libmpv's own plugin-style/dlopen'd dependencies (e.g. some
+# codec libs loaded at runtime rather than linked) may need to be added
+# here once this is actually tested on Linux.
+libs = ["libmpv.so.2"]
+
+# File associations — drives the MimeType field in the .desktop file (Linux) and
+# LSHandlerURLMap in Info.plist (macOS).  When Flick is installed, right-clicking
+# any of these file types will show "Open with Flick" in the desktop context menu.
+[[file-associations]]
+name = "Images"
+extensions = ["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "tiff", "tif", "avif", "heic", "heif", "ico", "apng"]
+mime_type = "image/png;image/jpeg;image/gif;image/webp;image/svg+xml;image/bmp;image/tiff;image/avif;image/heic;image/heif;image/x-icon"
+
+[[file-associations]]
+name = "Videos"
+extensions = ["mp4", "webm", "ogg", "ogv", "avi", "mov", "mkv", "flv", "wmv", "mpeg", "mpg", "3gp", "ts", "vob"]
+mime_type = "video/mp4;video/webm;video/ogg;video/x-theora+ogg;video/x-msvideo;video/quicktime;video/x-matroska;video/x-flv;video/x-ms-wmv;video/mpeg;video/mp2t;video/mp4v-es"

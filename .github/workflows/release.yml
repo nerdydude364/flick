@@ -1,0 +1,145 @@
+name: Release
+
+# Triggered by pushing a tag like `v0.2.0` — see scripts/tag-release.sh, which
+# derives that tag from Cargo.toml's `version` so the two never drift apart.
+# workflow_dispatch is just for manually re-running against an existing tag
+# (e.g. retrying a flaky matrix leg) without re-tagging.
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    name: package (${{ matrix.platform }}-${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos
+            arch: arm64
+            runner: macos-14
+          - platform: macos
+            arch: amd64
+            runner: macos-15-intel
+          - platform: linux
+            arch: amd64
+            runner: ubuntu-22.04
+          - platform: linux
+            arch: arm64
+            runner: ubuntu-22.04-arm
+          - platform: windows
+            arch: amd64
+            runner: windows-latest
+          - platform: windows
+            arch: arm64
+            runner: windows-11-arm
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo/target
+        uses: Swatinem/rust-cache@v2
+        with:
+          # -v2 suffix busts a stale Linux cache whose target/ contained a
+          # flick binary linked against libmpv.so.1 (apt's legacy runtime
+          # lib) instead of .so.2 — Cargo had no way to detect that the
+          # *system* libmpv.so target had moved on since that cache was
+          # first populated, so it kept skipping relinking and CI kept
+          # repackaging the stale .so.1-linked binary release after
+          # release, surfacing as "VersionMismatch" at runtime. Bump this
+          # suffix again if a similar staleness issue ever recurs.
+          key: ${{ matrix.platform }}-${{ matrix.arch }}-v2
+
+      - name: Verify tag matches Cargo.toml version
+        shell: bash
+        run: |
+          CARGO_VERSION="$(grep -m1 '^version' Cargo.toml | sed -E 's/version = "(.*)"/\1/')"
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          if [ "$CARGO_VERSION" != "$TAG_VERSION" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match Cargo.toml version $CARGO_VERSION"
+            exit 1
+          fi
+          echo "VERSION=$CARGO_VERSION" >> "$GITHUB_ENV"
+
+      - name: Sync Packager.toml version
+        shell: bash
+        run: perl -i -pe "s/^version = .*/version = \"$VERSION\"/" Packager.toml
+
+      - name: Install macOS build deps
+        if: matrix.platform == 'macos'
+        run: brew install mpv pkg-config dylibbundler
+
+      - name: Install Linux build deps
+        if: matrix.platform == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libmpv-dev pkg-config libfuse2
+
+      - name: Install cargo-packager
+        run: cargo install --locked cargo-packager
+
+      - name: Package (macOS)
+        if: matrix.platform == 'macos'
+        run: ./scripts/package-macos.sh
+
+      - name: Package (Linux)
+        if: matrix.platform == 'linux'
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: "1"
+        run: ./scripts/package-linux.sh
+
+      - name: Package (Windows)
+        if: matrix.platform == 'windows'
+        shell: bash
+        env:
+          MPV_ARCH: ${{ matrix.arch }}
+        run: ./scripts/package-windows.sh
+
+      - name: Collect release artifacts
+        shell: bash
+        run: |
+          mkdir -p out
+          if [ "${{ matrix.platform }}" = "macos" ]; then
+            cp dist/*.dmg "out/Flick-${{ matrix.arch }}.dmg"
+          elif [ "${{ matrix.platform }}" = "linux" ]; then
+            cp dist/*.deb "out/Flick-${{ matrix.arch }}.deb"
+            cp dist/*.AppImage "out/Flick-${{ matrix.arch }}.AppImage"
+          else
+            cp dist/*-setup.exe "out/Flick-${{ matrix.arch }}-setup.exe"
+          fi
+          ls -la out
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: flick-${{ matrix.platform }}-${{ matrix.arch }}
+          path: out/*
+          if-no-files-found: error
+
+  publish-release:
+    name: Publish GitHub release
+    needs: package
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Create/update release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          generate_release_notes: true
+          files: dist/*

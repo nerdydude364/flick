@@ -1,0 +1,8 @@
+[macos]
+certificate_thumbprint = "YOUR_DEVELOPER_ID_CERT_THUMBPRINT"
+
+[macos.notarize]
+apple_id = "your-apple-id@email.com"
+password = "@keychain:AC_PASSWORD" # Points to your stored app-specific password
+team_id = "ABC123XYZ"
+

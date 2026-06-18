@@ -1,0 +1,213 @@
+// Reusable widgets, ported from design/prototype/ui/components.slint and trued up
+// against Slint 1.16.1.
+import { Theme } from "theme.slint";
+
+export component IconButton inherits Rectangle {
+    in property <image> icon;
+    in property <bool> active: false;
+    in property <bool> enabled: true;
+    in property <bool> filled: false;
+    in property <length> size: Theme.control;
+    in property <length> icon-size: 18px;
+    in property <bool> has-badge: false;
+    in property <string> badge: "";
+    callback clicked();
+
+    width: size;
+    height: size;
+    border-radius: filled ? size / 2 : Theme.radius-sm;
+    background: filled
+        ? (touch.pressed ? Theme.muted : Theme.fg)
+        : (active
+            ? Theme.accent-soft
+            : (touch.pressed ? Theme.surface-3 : (touch.has-hover ? Theme.surface-2 : transparent)));
+    border-width: (active && !filled) ? 1px : 0px;
+    border-color: Theme.accent-soft-2;
+    opacity: enabled ? 1.0 : 0.45;
+
+    animate background { duration: Theme.fast; }
+
+    touch := TouchArea {
+        enabled: root.enabled;
+        clicked => { root.clicked(); }
+    }
+
+    Image {
+        source: root.icon;
+        width: root.icon-size;
+        height: root.icon-size;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        colorize: filled ? Theme.bg : (active ? Theme.accent : Theme.fg);
+    }
+
+    if root.has-badge: Rectangle {
+        x: parent.width - self.width - 2px;
+        y: parent.height - self.height - 2px;
+        width: badge-text.preferred-width + 4px;
+        height: 11px;
+        border-radius: 3px;
+        background: Theme.surface;
+
+        badge-text := Text {
+            x: 2px;
+            text: root.badge;
+            font-size: 8px;
+            font-weight: 700;
+            color: Theme.muted;
+        }
+    }
+}
+
+export component ToggleChip inherits Rectangle {
+    in property <image> icon;
+    in property <string> label;
+    in property <bool> active: false;
+    callback clicked();
+
+    height: 30px;
+    width: inner.preferred-width;
+    border-radius: self.height / 2;
+    background: active ? Theme.accent-soft : (touch.has-hover ? Theme.surface-2 : transparent);
+    border-width: 1px;
+    border-color: active ? Theme.accent-soft-2 : Theme.border;
+
+    animate background { duration: Theme.fast; }
+
+    // Pin layout to the full 30px chip height — percentage height on layouts
+    // inside a Rectangle doesn't reliably stretch in Slint, so the icon was
+    // top-aligned in a shorter intrinsic box. Manual icon y-centering below.
+    inner := HorizontalLayout {
+        height: 30px;
+        padding-left: 10px;
+        padding-right: 10px;
+        spacing: Theme.gap-xs;
+
+        Rectangle {
+            width: 13px;
+            height: 30px;
+            Image {
+                source: root.icon;
+                width: 13px;
+                height: 13px;
+                y: (parent.height - self.height) / 2;
+                colorize: root.active ? Theme.accent : (touch.has-hover ? Theme.fg : Theme.muted);
+            }
+        }
+
+        Text {
+            height: 30px;
+            text: root.label;
+            color: root.active ? Theme.accent : (touch.has-hover ? Theme.fg : Theme.muted);
+            font-size: 12px;
+            vertical-alignment: center;
+        }
+    }
+
+    touch := TouchArea {
+        width: 100%;
+        height: 100%;
+        clicked => { root.clicked(); }
+    }
+}
+
+// Equalizer bars beside the currently playing library item.
+export component EqBars inherits HorizontalLayout {
+    spacing: 2px;
+    alignment: end;
+    height: 14px;
+
+    Rectangle { width: 2px; height: 6px; border-radius: 1px; background: Theme.accent; }
+    Rectangle { width: 2px; height: 12px; border-radius: 1px; background: Theme.accent; }
+    Rectangle { width: 2px; height: 8px; border-radius: 1px; background: Theme.accent; }
+}
+
+// Cropped single frame from a tiled sprite sheet — used for scrub and list
+// hover previews.
+export component SpriteFramePreview inherits Rectangle {
+    in property <image> sheet;
+    in property <int> frame-col;
+    in property <int> frame-row;
+    in property <int> columns: 10;
+    in property <int> rows: 1;
+    in property <int> thumb-w: 160;
+    in property <int> thumb-h: 90;
+
+    width: thumb-w * 1px;
+    height: thumb-h * 1px;
+    clip: true;
+    border-radius: 5px;
+    border-width: 2px;
+    border-color: #ffffff26;
+    background: #000000;
+
+    Image {
+        source: sheet;
+        x: -frame-col * thumb-w * 1px;
+        y: -frame-row * thumb-h * 1px;
+        width: columns * thumb-w * 1px;
+        height: rows * thumb-h * 1px;
+    }
+}
+
+export component TrackSlider inherits Rectangle {
+    in-out property <float> value: 0.0;
+    // Default 20px; pass Theme.control in the transport bar so the slider
+    // matches icon-button height and centers without layout alignment hacks.
+    in property <length> hit-h: 20px;
+    callback changed(float);
+
+    height: hit-h;
+
+    track := Rectangle {
+        x: 0;
+        y: parent.height / 2 - 2px;
+        height: 4px;
+        width: 100%;
+        border-radius: 2px;
+        background: Theme.surface-3;
+
+        Rectangle {
+            x: 0;
+            height: 100%;
+            width: parent.width * root.value;
+            border-radius: 2px;
+            background: Theme.accent;
+        }
+    }
+
+    thumb := Rectangle {
+        width: 12px;
+        height: 12px;
+        border-radius: 6px;
+        background: Theme.fg;
+        border-width: 2px;
+        border-color: Theme.accent;
+        x: parent.width * root.value - self.width / 2;
+        y: parent.height / 2 - self.height / 2;
+
+        if drag.has-hover || drag.pressed: Rectangle {
+            x: -4px;
+            y: -4px;
+            width: parent.width + 8px;
+            height: parent.height + 8px;
+            border-radius: 10px;
+            background: Theme.accent-soft;
+        }
+    }
+
+    drag := TouchArea {
+        clicked => {
+            if (self.width > 0px) {
+                root.value = max(0.0, min(1.0, self.mouse-x / self.width));
+                root.changed(root.value);
+            }
+        }
+        moved => {
+            if (self.pressed && self.width > 0px) {
+                root.value = max(0.0, min(1.0, self.mouse-x / self.width));
+                root.changed(root.value);
+            }
+        }
+    }
+}

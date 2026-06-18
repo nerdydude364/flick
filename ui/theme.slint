@@ -1,0 +1,35 @@
+// Shared design tokens, ported from design/ui_theme.slint — single source of
+// color/spacing truth. Components and app-window.slint should only ever
+// read from Theme, never hardcode a color.
+export global Theme {
+    out property <color> bg: #0d0e10;
+    out property <color> surface: #16181b;
+    out property <color> surface-translucent: #16181bb8;
+    out property <color> surface-2: #1f2226;
+    out property <color> surface-3: #2a2d32;
+    out property <color> fg: #f3f5f6;
+    out property <color> muted: #9aa1ab;
+    out property <color> muted-2: #6b7178;
+    out property <color> border: #2c2f34;
+    out property <color> accent: #6fc6e8;
+    out property <color> accent-fg: #0d2730;
+    out property <color> accent-soft: #6fc6e829;
+    out property <color> accent-soft-2: #6fc6e84d;
+    out property <color> danger: #e8746f;
+
+    out property <length> radius-sm: 6px;
+    out property <length> radius-md: 10px;
+    out property <length> radius-lg: 14px;
+
+    out property <length> gap-xs: 6px;
+    out property <length> gap-sm: 10px;
+    out property <length> gap-md: 16px;
+
+    out property <length> control: 40px;
+    out property <length> control-lg: 48px;
+    out property <length> control-xl: 56px;
+
+    out property <length> sidebar-width: 320px;
+
+    out property <duration> fast: 120ms;
+}

@@ -1,0 +1,342 @@
+import { ListView } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+import { IconButton, ToggleChip, EqBars, SpriteFramePreview } from "components.slint";
+
+export struct PlaylistItemData {
+    queue-index: int,
+    name: string,
+    playing: bool,
+    sprite-status: string,
+    file-size-text: string,
+}
+
+export component Sidebar inherits Rectangle {
+    in property <[PlaylistItemData]> items;
+    in property <bool> shuffle-on;
+    in property <bool> loop-on;
+    in property <string> search-query: "";
+    in property <bool> image-mode: false;
+
+    callback open-videos();
+    callback open-folder();
+    callback clear-queue();
+    callback item-clicked(int);
+    callback search-changed(string);
+    callback toggle-shuffle();
+    callback toggle-loop();
+    callback reveal-item(int);
+    callback remove-item(int);
+    callback reorder-item(int, int);
+    callback item-hovered(int /* queue-index */, int /* display-index */);
+    callback item-unhovered();
+
+    property <int> hover-display-index: -1;
+    property <int> hover-queue-index: -1;
+    property <length> list-scroll-y: 0px;
+
+    // Populated from Rust when a hovered row has a cached sprite sheet.
+    in property <image> preview-image;
+    in property <bool> preview-visible: false;
+    in property <int> preview-col: 0;
+    in property <int> preview-row: 0;
+    in property <int> preview-columns: 10;
+    in property <int> preview-rows: 1;
+    in property <int> preview-thumb-w: 160;
+    in property <int> preview-thumb-h: 90;
+
+    property <int> drag-src-index: -1;
+    property <int> drag-over-index: -1;
+    property <bool> dragging: false;
+    property <bool> can-reorder: search-query == "" && !shuffle-on;
+    property <length> row-height: 48px;
+
+    background: Theme.surface.with-alpha(0.75);
+    border-width: 1px;
+    border-color: Theme.border;
+    // Allow the list hover preview to extend left over the canvas.
+    clip: false;
+
+    VerticalLayout {
+        padding-left: 14px;
+        padding-right: 14px;
+        padding-top: 16px;
+        spacing: Theme.gap-sm;
+
+        HorizontalLayout {
+            spacing: Theme.gap-xs;
+            Text {
+                text: "Library";
+                color: Theme.muted-2;
+                font-size: 11px;
+                letter-spacing: 1.2px;
+                vertical-alignment: center;
+            }
+            Rectangle { horizontal-stretch: 1; }
+            IconButton {
+                size: 32px;
+                icon-size: 15px;
+                icon: @image-url("icons/open-file.svg");
+                clicked => { open-videos(); }
+            }
+            IconButton {
+                size: 32px;
+                icon-size: 15px;
+                icon: @image-url("icons/open-folder.svg");
+                clicked => { open-folder(); }
+            }
+            IconButton {
+                size: 32px;
+                icon-size: 15px;
+                icon: @image-url("icons/clear.svg");
+                clicked => { clear-queue(); }
+            }
+        }
+
+        Rectangle {
+            height: 36px;
+            border-radius: Theme.radius-sm;
+            border-width: 1px;
+            border-color: search-input.has-focus ? Theme.accent-soft-2 : Theme.border;
+            background: Theme.bg;
+
+            HorizontalLayout {
+                height: 36px;
+                padding-left: 10px;
+                padding-right: 10px;
+                spacing: Theme.gap-xs;
+
+                Rectangle {
+                    width: 15px;
+                    height: 36px;
+                    Image {
+                        source: @image-url("icons/search.svg");
+                        width: 15px;
+                        height: 15px;
+                        y: (parent.height - self.height) / 2;
+                        colorize: Theme.muted-2;
+                    }
+                }
+
+                Rectangle {
+                    height: 36px;
+                    horizontal-stretch: 1;
+                    search-input := TextInput {
+                        width: 100%;
+                        height: 36px;
+                        color: Theme.fg;
+                        font-size: 13px;
+                        single-line: true;
+                        text: search-query;
+                        vertical-alignment: center;
+                        edited => { search-changed(self.text); }
+                    }
+                    if search-input.text == "": Text {
+                        y: (parent.height - self.height) / 2;
+                        text: "Search library…";
+                        color: Theme.muted-2;
+                        font-size: 13px;
+                    }
+                }
+            }
+        }
+
+        HorizontalLayout {
+            spacing: Theme.gap-xs;
+            ToggleChip {
+                icon: @image-url("icons/shuffle.svg");
+                label: "Shuffle";
+                active: shuffle-on;
+                clicked => { toggle-shuffle(); }
+            }
+            ToggleChip {
+                icon: @image-url("icons/loop.svg");
+                label: "Loop";
+                active: loop-on;
+                clicked => { toggle-loop(); }
+            }
+            Rectangle { horizontal-stretch: 1; }
+            Text {
+                text: items.length + " items";
+                color: Theme.muted-2;
+                font-size: 11px;
+                vertical-alignment: center;
+            }
+        }
+
+        list-area := Rectangle {
+            vertical-stretch: 1;
+            width: 100%;
+
+            Rectangle {
+                y: 0;
+                height: 1px;
+                width: 100%;
+                background: Theme.border;
+            }
+
+            VerticalLayout {
+                width: 100%;
+                height: 100%;
+                padding-top: 2px;
+                padding-bottom: 12px;
+
+                list-view := ListView {
+                    vertical-stretch: 1;
+                    changed viewport-y => { list-scroll-y = self.viewport-y; }
+                    for entry[i] in items: Rectangle {
+                        height: row-height;
+                        border-radius: Theme.radius-sm;
+                        background: entry.playing
+                            ? Theme.accent-soft
+                            : (dragging && drag-over-index == entry.queue-index && drag-src-index != entry.queue-index
+                                ? Theme.surface-2
+                                : (row-touch.has-hover ? Theme.surface-2 : transparent));
+                        border-width: dragging && drag-over-index == entry.queue-index && drag-src-index != entry.queue-index ? 1px : 0px;
+                        border-color: Theme.accent-soft-2;
+
+                        HorizontalLayout {
+                            padding: 8px;
+                            spacing: Theme.gap-sm;
+
+                            Rectangle {
+                                width: 32px;
+                                height: 32px;
+                                border-radius: Theme.radius-sm;
+                                background: Theme.surface-3;
+                                Image {
+                                    source: image-mode ? @image-url("icons/image-file.svg") : @image-url("icons/video-file.svg");
+                                    width: 15px;
+                                    height: 15px;
+                                    colorize: entry.playing ? Theme.accent : Theme.muted;
+                                }
+                            }
+
+                            VerticalLayout {
+                                alignment: center;
+                                spacing: 2px;
+                                horizontal-stretch: 1;
+                                Text {
+                                    text: entry.name;
+                                    color: entry.playing ? Theme.accent : Theme.fg;
+                                    font-size: 13px;
+                                    overflow: elide;
+                                }
+                                Text {
+                                    text: entry.sprite-status == "-" ? entry.file-size-text : entry.file-size-text + "  " + entry.sprite-status;
+                                    color: Theme.muted-2;
+                                    font-size: 11px;
+                                }
+                            }
+
+                            if entry.playing: EqBars {}
+                        }
+
+                        row-touch := TouchArea {
+                            pointer-event(event) => {
+                                if (event.kind == PointerEventKind.down && event.button == PointerEventButton.left) {
+                                    if (can-reorder) {
+                                        drag-src-index = entry.queue-index;
+                                        drag-over-index = entry.queue-index;
+                                    }
+                                    dragging = false;
+                                }
+                                if (event.kind == PointerEventKind.up) {
+                                    if (dragging && drag-src-index >= 0 && drag-over-index >= 0 && drag-src-index != drag-over-index) {
+                                        reorder-item(drag-src-index, drag-over-index);
+                                    } else if (!dragging) {
+                                        item-clicked(entry.queue-index);
+                                    }
+                                    dragging = false;
+                                    drag-src-index = -1;
+                                    drag-over-index = -1;
+                                }
+                                if (event.kind == PointerEventKind.cancel) {
+                                    dragging = false;
+                                    drag-src-index = -1;
+                                    drag-over-index = -1;
+                                }
+                            }
+                            moved => {
+                                if (can-reorder && drag-src-index == entry.queue-index) {
+                                    if (abs(self.mouse-y - self.pressed-y) > 6px) {
+                                        dragging = true;
+                                    }
+                                    if (dragging) {
+                                        drag-over-index = max(0, min(items.length - 1, entry.queue-index + floor((self.mouse-y - self.pressed-y) / row-height + 0.5)));
+                                    }
+                                }
+                            }
+                            changed has-hover => {
+                                if (self.has-hover && !image-mode && !dragging && entry.sprite-status == "✓") {
+                                    hover-display-index = i;
+                                    hover-queue-index = entry.queue-index;
+                                    item-hovered(entry.queue-index, i);
+                                } else if (!self.has-hover && hover-queue-index == entry.queue-index) {
+                                    hover-display-index = -1;
+                                    hover-queue-index = -1;
+                                    item-unhovered();
+                                }
+                            }
+                        }
+
+                        ContextMenuArea {
+                            Menu {
+                                MenuItem {
+                                    title: entry.name + " — " + entry.file-size-text;
+                                }
+                                MenuSeparator {}
+                                MenuItem {
+                                    title: "Show in Folder";
+                                    activated => { reveal-item(entry.queue-index); }
+                                }
+                                MenuItem {
+                                    title: "Remove from Queue";
+                                    activated => { remove-item(entry.queue-index); }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if items.length == 0: VerticalLayout {
+                padding-top: 40px;
+                alignment: center;
+                Text {
+                    text: search-query != "" ? "No matches in this library." : "No items yet — open a file or folder.";
+                    color: Theme.muted-2;
+                    font-size: 12.5px;
+                    horizontal-alignment: center;
+                }
+            }
+        }
+    }
+
+    // Outside the layout so absolute x/y are relative to the sidebar edge.
+    if preview-visible && hover-display-index >= 0 && !image-mode: Rectangle {
+        x: -preview-thumb-w * 1px - 8px;
+        y: list-area.y + 2px + hover-display-index * row-height - list-scroll-y
+            + (row-height - preview-thumb-h * 1px) / 2;
+        width: preview-thumb-w * 1px;
+        height: preview-thumb-h * 1px;
+
+        Rectangle {
+            x: 0;
+            y: 4px;
+            width: 100%;
+            height: 100%;
+            border-radius: 7px;
+            background: #00000099;
+        }
+
+        SpriteFramePreview {
+            sheet: preview-image;
+            frame-col: preview-col;
+            frame-row: preview-row;
+            columns: preview-columns;
+            rows: preview-rows;
+            thumb-w: preview-thumb-w;
+            thumb-h: preview-thumb-h;
+        }
+    }
+}

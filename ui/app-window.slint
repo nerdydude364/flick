@@ -1,0 +1,625 @@
+import { Theme } from "theme.slint";
+import { Sidebar, PlaylistItemData } from "sidebar.slint";
+import { ProgressBar } from "progress-bar.slint";
+import { ImageViewer } from "image-viewer.slint";
+import { IconButton, TrackSlider } from "components.slint";
+
+export { PlaylistItemData }
+
+export component AppWindow inherits Window {
+    title: "Flick";
+    preferred-width: 1200px;
+    preferred-height: 640px;
+    min-width: 960px;
+    min-height: 600px;
+    // No `background` here, and no filler Rectangle covering the video area
+    // either: Slint's renderer issues a real draw/clear for *any* element in
+    // the scene graph, even ones with a "transparent" background. The official
+    // opengl_underlay example only ever draws UI chrome that's actually sized
+    // to its content (a side panel) and leaves the rest of the canvas
+    // completely unoccupied by Slint elements, relying on mpv's BeforeRendering
+    // draw to be the only thing touching those pixels. We do the same below:
+    // sidebar + bottom bars are all anchored/sized to their own footprint only.
+
+    in-out property <bool> playing: false;
+    in property <[PlaylistItemData]> playlist-items: [];
+    in property <bool> shuffle-on: false;
+    in property <bool> loop-on: false;
+    in property <string> search-query: "";
+
+    in property <float> current-time: 0;
+    in property <float> duration: 0;
+    in property <string> current-time-text: "0:00";
+    in property <string> duration-text: "0:00";
+    in property <float> ab-loop-a: -1;
+    in property <float> ab-loop-b: -1;
+    in property <bool> ab-loop-picking: false;
+    in property <bool> ab-loop-active: false;
+    in property <string> error-message: "";
+    in property <string> playback-speed-text: "1x";
+    in property <bool> is-fullscreen: false;
+
+    // Sprite sheet for progress-bar hover preview (populated from Rust).
+    in property <image> sprite-image;
+    in property <bool> sprite-ready: false;
+    in property <bool> sprite-loading: false;
+    in property <float> sprite-interval-sec: 1.0;
+    in property <int> sprite-frame-count: 0;
+    in property <int> sprite-columns: 10;
+    in property <int> sprite-rows: 1;
+    in property <int> sprite-thumb-w: 160;
+    in property <int> sprite-thumb-h: 90;
+
+    // Sidebar list hover preview (random sprite frame per hover).
+    in property <image> list-preview-image;
+    in property <bool> list-preview-visible: false;
+    in property <int> list-preview-col: 0;
+    in property <int> list-preview-row: 0;
+    in property <int> list-preview-columns: 10;
+    in property <int> list-preview-rows: 1;
+    in property <int> list-preview-thumb-w: 160;
+    in property <int> list-preview-thumb-h: 90;
+
+    in property <bool> image-mode: false;
+    in property <bool> gallery-open: false;
+    in property <image> current-image;
+    in property <string> image-counter-text: "";
+    in property <int> image-position: 0;
+    in property <int> image-total: 0;
+    in property <bool> has-images: false;
+    in property <bool> slideshow-on: false;
+    in property <string> slideshow-duration-text: "8s";
+    in property <[image]> gallery-thumbnails: [];
+
+    // Manual, persistent drawer state (toggled via the handle next to the
+    // sidebar) — independent of `chrome-visible` below.
+    property <bool> sidebar-open: true;
+    // Transient idle-timeout state: true while the mouse is moving (or a key
+    // was just pressed), flips false 2s after the last activity. Drives
+    // opacity on the chrome only — never affects layout/width — so it can
+    // fade back in instantly with no relayout.
+    property <bool> chrome-visible: true;
+    // Combined height of the scrub row + transport row below — the sidebar
+    // stops above them rather than running the full window height, matching
+    // the design's grid (sidebar only shares row 1 with the canvas).
+    property <length> scrub-h: is-fullscreen ? 52px : 40px;
+    property <length> transport-h: is-fullscreen ? 76px : 64px;
+    property <length> bottom-h: scrub-h + transport-h;
+    // Volume/slideshow-speed sliders have no backing Rust property to read
+    // an initial value from (mpv's actual volume isn't observed back into
+    // Slint), so these are purely local UI state, same as the std-widgets
+    // Sliders they replace — moving them still drives the real callbacks.
+    property <float> volume-value: 100;
+    property <float> volume-before-mute: 100;
+    property <float> slideshow-seconds: 8.0;
+    // Per-image view transform — reset when the displayed image changes.
+    in-out property <float> image-zoom: 100;
+    in-out property <float> image-rotation-deg: 0;
+
+    callback toggle-mode();
+    callback navigate-image(int /* delta: -1 or 1 */);
+    callback open-images();
+    callback toggle-slideshow();
+    callback slideshow-duration-changed(float /* seconds */);
+    callback toggle-gallery();
+    callback gallery-item-clicked(int /* position within gallery-thumbnails */);
+
+    callback toggle-play();
+    callback seek-relative(float /* seconds, +/- */);
+    callback seek-to-ratio(float /* 0.0 - 1.0 */);
+    callback volume-changed(float /* 0-100, matches mpv's native volume range */);
+    callback toggle-fullscreen();
+    callback previous-track();
+    callback next-track();
+    callback toggle-ab-loop();
+    callback dismiss-error();
+    callback cycle-speed();
+    callback take-screenshot();
+    callback add-subtitle();
+
+    callback open-videos <=> sidebar.open-videos;
+    callback open-folder <=> sidebar.open-folder;
+    callback clear-queue <=> sidebar.clear-queue;
+    callback item-clicked <=> sidebar.item-clicked;
+    callback search-changed <=> sidebar.search-changed;
+    callback toggle-shuffle <=> sidebar.toggle-shuffle;
+    callback toggle-loop <=> sidebar.toggle-loop;
+    callback reveal-item <=> sidebar.reveal-item;
+    callback remove-item <=> sidebar.remove-item;
+    callback reorder-item <=> sidebar.reorder-item;
+    callback list-item-hovered <=> sidebar.item-hovered;
+    callback list-item-unhovered <=> sidebar.item-unhovered;
+
+    forward-focus: key-handler;
+
+    // Single ancestor TouchArea wrapping the whole window's content, purely
+    // for activity detection — it adds no paint of its own (TouchArea is
+    // input-only), so it doesn't disturb the mpv underlay rendering trick
+    // described above. `mouse-x`/`mouse-y` are updated on every pointer move
+    // anywhere within the window — including over the bare video surface —
+    // *before* any nested control (a sidebar button, the progress bar, ...)
+    // gets a chance to consume the event, since filtering runs top-down on
+    // the way into the tree regardless of which descendant ultimately
+    // handles it. That makes this reliable for "any movement = wake up",
+    // unlike a same-level sibling TouchArea, which a frontmost overlapping
+    // control could shadow entirely.
+    activity := TouchArea {
+        x: 0;
+        y: 0;
+        width: 100%;
+        height: 100%;
+
+        changed mouse-x => { chrome-visible = true; hide-timer.restart(); }
+        changed mouse-y => { chrome-visible = true; hide-timer.restart(); }
+        double-clicked => { toggle-fullscreen(); key-handler.focus(); }
+
+        // Canvas click layer (video mode) — sits behind chrome; toggles play/pause
+        // like Space, and fullscreen on double-click like the activity area
+        // above (this TouchArea fully overlaps it over the canvas, so without
+        // its own handler here double-clicks on the video never reach that
+        // outer one). Image mode handles clicks in ImageViewer instead.
+        if !image-mode: TouchArea {
+            x: 0;
+            y: 0;
+            width: parent.width - sidebar.width;
+            height: parent.height - bottom-h;
+            clicked => { toggle-play(); key-handler.focus(); }
+            double-clicked => { toggle-fullscreen(); key-handler.focus(); }
+        }
+
+        // Declared before the sidebar/drawer chrome below (not after, unlike
+        // its position in the file previously) so those paint on *top* of it
+        // — ImageViewer paints an opaque black background, which otherwise
+        // covered the drawer handle entirely whenever image-mode was on.
+        //
+        // Sized to the full window (like the mpv video underlay, which
+        // always covers the whole canvas regardless of chrome) so the image
+        // itself renders edge-to-edge behind the sidebar/bottom bars; only
+        // its click handling stays confined to `hit-width`/`hit-height`, matching
+        // the video click layer above.
+        if image-mode: image-viewer := ImageViewer {
+            x: 0;
+            y: 0;
+            width: 100%;
+            height: 100%;
+            hit-width: parent.width - sidebar.width;
+            hit-height: parent.height - bottom-h;
+            has-images: has-images;
+            gallery-open: gallery-open;
+            current-image: current-image;
+            zoom-percent: image-zoom;
+            rotation-deg: image-rotation-deg;
+            gallery-thumbnails: gallery-thumbnails;
+            gallery-current-index: image-position - 1;
+            navigate(delta) => { navigate-image(delta); key-handler.focus(); }
+            open-images => { open-images(); }
+            toggle-fullscreen => { toggle-fullscreen(); key-handler.focus(); }
+            toggle-playback => { toggle-slideshow(); key-handler.focus(); }
+            gallery-item-clicked(i) => { gallery-item-clicked(i); key-handler.focus(); }
+        }
+
+        sidebar := Sidebar {
+            x: parent.width - self.width;
+            y: 0;
+            width: sidebar-open ? Theme.sidebar-width : 0px;
+            height: 100%;
+            opacity: chrome-visible ? 1.0 : 0.0;
+            items: playlist-items;
+            shuffle-on: shuffle-on;
+            loop-on: loop-on;
+            search-query: search-query;
+            image-mode: image-mode;
+            preview-image: list-preview-image;
+            preview-visible: list-preview-visible;
+            preview-col: list-preview-col;
+            preview-row: list-preview-row;
+            preview-columns: list-preview-columns;
+            preview-rows: list-preview-rows;
+            preview-thumb-w: list-preview-thumb-w;
+            preview-thumb-h: list-preview-thumb-h;
+
+            animate width { duration: 200ms; easing: ease-in-out; }
+            animate opacity { duration: 200ms; }
+        }
+
+        // Drawer handle: tracks the sidebar's current left edge (so it
+        // slides along with the open/close animation) and stays reachable
+        // even when the sidebar is fully collapsed to 0 width.
+        IconButton {
+            x: sidebar.x - self.width - 4px;
+            y: 16px;
+            size: 32px;
+            icon-size: 15px;
+            icon: @image-url("icons/drawer.svg");
+            opacity: chrome-visible ? 1.0 : 0.0;
+            animate opacity { duration: 200ms; }
+            clicked => { sidebar-open = !sidebar-open; key-handler.focus(); }
+        }
+
+        // Mode segmented control — after the image viewer so it stays clickable
+        // in image mode (same position in both modes, top-left of the canvas).
+        Rectangle {
+            x: 16px;
+            y: 16px;
+            height: 32px;
+            width: seg.preferred-width + 6px;
+            background: Theme.surface-translucent;
+            border-radius: self.height / 2;
+            border-width: 1px;
+            border-color: Theme.border;
+            opacity: chrome-visible ? 1.0 : 0.0;
+            animate opacity { duration: 200ms; }
+
+            seg := HorizontalLayout {
+                padding: 3px;
+                spacing: 2px;
+
+                Rectangle {
+                    height: 26px;
+                    min-width: video-label.preferred-width + 28px;
+                    border-radius: self.height / 2;
+                    background: !image-mode ? Theme.accent-soft : transparent;
+
+                    video-label := Text {
+                        text: "Video";
+                        font-size: 13px;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                        color: !image-mode ? Theme.accent : Theme.muted;
+                    }
+                    TouchArea { clicked => { if (image-mode) { toggle-mode(); } key-handler.focus(); } }
+                }
+                Rectangle {
+                    height: 26px;
+                    min-width: image-label.preferred-width + 28px;
+                    border-radius: self.height / 2;
+                    background: image-mode ? Theme.accent-soft : transparent;
+
+                    image-label := Text {
+                        text: "Image";
+                        font-size: 13px;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                        color: image-mode ? Theme.accent : Theme.muted;
+                    }
+                    TouchArea { clicked => { if (!image-mode) { toggle-mode(); } key-handler.focus(); } }
+                }
+            }
+        }
+
+        // Fullscreen theater chrome: one tall gradient behind both bottom rows so
+        // controls sit inside opaque black rather than spilling above a short bar.
+        if is-fullscreen: Rectangle {
+            x: 0;
+            y: parent.height - bottom-h;
+            width: 100%;
+            height: bottom-h;
+            background: @linear-gradient(0deg, #0d0e10eb 0%, #0d0e10cc 55%, #0d0e1000 100%);
+            opacity: chrome-visible ? 1.0 : 0.0;
+            animate opacity { duration: 200ms; }
+        }
+
+        // ---- scrub row: full width, spans under canvas *and* sidebar ----
+        Rectangle {
+            x: 0;
+            y: parent.height - bottom-h;
+            width: 100%;
+            height: scrub-h;
+            background: transparent;
+            opacity: chrome-visible ? 1.0 : 0.0;
+            animate opacity { duration: 200ms; }
+
+            TouchArea { }
+
+            if !image-mode: HorizontalLayout {
+                padding-left: 16px;
+                padding-right: 16px;
+                padding-top: is-fullscreen ? 16px : 10px;
+                padding-bottom: is-fullscreen ? 10px : 4px;
+                spacing: 12px;
+                Text {
+                    text: current-time-text;
+                    color: Theme.fg;
+                    font-size: 12px;
+                    width: 42px;
+                    vertical-alignment: center;
+                }
+                ProgressBar {
+                    horizontal-stretch: 1;
+                    current-time: current-time;
+                    duration: duration;
+                    ab-loop-a: ab-loop-a;
+                    ab-loop-b: ab-loop-b;
+                    sprite-image: root.sprite-image;
+                    sprite-ready: root.sprite-ready;
+                    sprite-loading: root.sprite-loading;
+                    sprite-interval-sec: root.sprite-interval-sec;
+                    sprite-frame-count: root.sprite-frame-count;
+                    sprite-columns: root.sprite-columns;
+                    sprite-rows: root.sprite-rows;
+                    sprite-thumb-w: root.sprite-thumb-w;
+                    sprite-thumb-h: root.sprite-thumb-h;
+                    clicked-ratio(ratio) => { seek-to-ratio(ratio); key-handler.focus(); }
+                }
+                Text {
+                    text: duration-text;
+                    color: Theme.muted;
+                    font-size: 12px;
+                    width: 42px;
+                    horizontal-alignment: right;
+                    vertical-alignment: center;
+                }
+            }
+
+            if image-mode: HorizontalLayout {
+                alignment: center;
+                spacing: 10px;
+                Text { text: "Image"; color: Theme.muted; font-size: 12px; vertical-alignment: center; }
+                Text {
+                    text: has-images ? image-counter-text : "—";
+                    color: Theme.muted;
+                    font-size: 12px;
+                    vertical-alignment: center;
+                }
+                if has-images && image-total > 0 && image-total <= 15: HorizontalLayout {
+                    spacing: 5px;
+                    for dot[i] in image-total: Rectangle {
+                        width: 5px;
+                        height: 5px;
+                        border-radius: 2.5px;
+                        background: i == (image-position - 1) ? Theme.accent : Theme.surface-3;
+                    }
+                }
+            }
+        }
+
+        // ---- transport row: full width ----
+        Rectangle {
+            x: 0;
+            y: parent.height - transport-h;
+            width: 100%;
+            height: transport-h;
+            background: transparent;
+            opacity: chrome-visible ? 1.0 : 0.0;
+            animate opacity { duration: 200ms; }
+
+            TouchArea { }
+
+            HorizontalLayout {
+                padding-left: 16px;
+                padding-right: 16px;
+                padding-top: is-fullscreen ? (transport-h - Theme.control) / 2 : 12px;
+                padding-bottom: is-fullscreen ? (transport-h - Theme.control) / 2 : 12px;
+                spacing: 10px;
+
+                if !image-mode: HorizontalLayout {
+                    spacing: 8px;
+                    width: 250px;
+                    IconButton {
+                        icon: @image-url("icons/cc.svg");
+                        clicked => { add-subtitle(); key-handler.focus(); }
+                    }
+                    IconButton {
+                        icon: @image-url("icons/camera.svg");
+                        clicked => { take-screenshot(); key-handler.focus(); }
+                    }
+                    IconButton {
+                        icon: @image-url("icons/rewind10.svg");
+                        has-badge: true;
+                        badge: "10";
+                        clicked => { seek-relative(-10.0); key-handler.focus(); }
+                    }
+                    IconButton {
+                        icon: @image-url("icons/forward10.svg");
+                        has-badge: true;
+                        badge: "10";
+                        clicked => { seek-relative(10.0); key-handler.focus(); }
+                    }
+                    IconButton {
+                        icon: @image-url("icons/ab-loop.svg");
+                        active: ab-loop-active || ab-loop-picking;
+                        has-badge: ab-loop-picking;
+                        badge: ab-loop-a >= 0 ? "B" : "A";
+                        clicked => { toggle-ab-loop(); key-handler.focus(); }
+                    }
+                    Rectangle {
+                        width: 40px;
+                        height: Theme.control;
+                        border-radius: Theme.radius-sm;
+                        background: speed-touch.pressed ? Theme.surface-3 : (speed-touch.has-hover ? Theme.surface-2 : transparent);
+                        animate background { duration: Theme.fast; }
+                        Text {
+                            text: playback-speed-text;
+                            font-size: 12px;
+                            color: Theme.fg;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                        speed-touch := TouchArea { clicked => { cycle-speed(); key-handler.focus(); } }
+                    }
+                }
+
+                if image-mode: HorizontalLayout {
+                    spacing: 8px;
+                    IconButton {
+                        icon: @image-url("icons/grid.svg");
+                        active: !gallery-open;
+                        clicked => { toggle-gallery(); key-handler.focus(); }
+                    }
+                    IconButton {
+                        icon: @image-url("icons/zoom-out.svg");
+                        clicked => {
+                            image-zoom = max(5, image-zoom - 5);
+                            key-handler.focus();
+                        }
+                    }
+                    Rectangle {
+                        width: 48px;
+                        height: Theme.control;
+                        border-radius: Theme.radius-sm;
+                        Text {
+                            text: "\{Math.round(image-zoom)}%";
+                            font-size: 12px;
+                            color: Theme.fg;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                    }
+                    IconButton {
+                        icon: @image-url("icons/zoom-in.svg");
+                        clicked => {
+                            image-zoom = min(500, image-zoom + 5);
+                            key-handler.focus();
+                        }
+                    }
+                    IconButton {
+                        icon: @image-url("icons/rotate.svg");
+                        clicked => {
+                            image-rotation-deg = image-rotation-deg - 45;
+                            key-handler.focus();
+                        }
+                    }
+                }
+
+                Rectangle { horizontal-stretch: 1; }
+
+                Rectangle {
+                    HorizontalLayout {
+                        spacing: 10px;
+                        alignment: center;
+                        IconButton {
+                            size: Theme.control;
+                            icon-size: 18px;
+                            icon: @image-url("icons/prev.svg");
+                            clicked => { if (image-mode) { navigate-image(-1); } else { previous-track(); } key-handler.focus(); }
+                        }
+                        IconButton {
+                            size: Theme.control;
+                            icon-size: 18px;
+                            filled: true;
+                            enabled: !(image-mode && !gallery-open);
+                            icon: (image-mode ? slideshow-on : playing) ? @image-url("icons/pause.svg") : @image-url("icons/play.svg");
+                            clicked => { if (image-mode) { toggle-slideshow(); } else { toggle-play(); } key-handler.focus(); }
+                        }
+                        IconButton {
+                            size: Theme.control;
+                            icon-size: 18px;
+                            icon: @image-url("icons/next.svg");
+                            clicked => { if (image-mode) { navigate-image(1); } else { next-track(); } key-handler.focus(); }
+                        }
+                    }
+                }
+
+                Rectangle { horizontal-stretch: 1; }
+
+                HorizontalLayout {
+                    spacing: 8px;
+                    width: 250px;
+                    HorizontalLayout {
+                        spacing: 4px;
+                        width: 200px;
+                        if !image-mode: IconButton {
+                            icon: volume-value <= 0 ? @image-url("icons/volume-mute.svg") : @image-url("icons/volume.svg");
+                            clicked => {
+                                if (volume-value <= 0) {
+                                    volume-value = max(volume-before-mute, 1.0);
+                                } else {
+                                    volume-before-mute = volume-value;
+                                    volume-value = 0;
+                                }
+                                volume-changed(volume-value);
+                                key-handler.focus();
+                            }
+                        }
+                        if !image-mode: TrackSlider {
+                            hit-h: Theme.control;
+                            horizontal-stretch: 1;
+                            value: volume-value / 100.0;
+                            changed(v) => { volume-value = v * 100.0; volume-changed(volume-value); }
+                        }
+                        if slideshow-on: HorizontalLayout{
+                            spacing: 10px;
+                            TrackSlider {
+                                hit-h: Theme.control;
+                                width: 150px;
+                                value: (slideshow-seconds - 2.0) / 298.0;
+                                changed(v) => {
+                                    slideshow-seconds = 2.0 + v * 298.0;
+                                    slideshow-duration-changed(slideshow-seconds);
+                                }
+                            }
+                            Text { text: slideshow-duration-text; color: Theme.muted-2; font-size: 14px; vertical-alignment: center; }
+                        }
+                    }
+
+                    IconButton {
+                        icon: is-fullscreen ? @image-url("icons/fullscreen-exit.svg") : @image-url("icons/fullscreen-enter.svg");
+                        clicked => { toggle-fullscreen(); key-handler.focus(); }
+                    }
+                }
+            }
+        }
+
+        if error-message != "": Rectangle {
+            x: 0;
+            y: 0;
+            width: parent.width - sidebar.width;
+            height: 40px;
+            background: #7f1d1de6;
+
+            HorizontalLayout {
+                padding: 8px;
+                spacing: 8px;
+                Text {
+                    horizontal-stretch: 1;
+                    text: error-message;
+                    color: white;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+                IconButton {
+                    size: 28px;
+                    icon-size: 13px;
+                    icon: @image-url("icons/close.svg");
+                    clicked => { dismiss-error(); key-handler.focus(); }
+                }
+            }
+        }
+
+        key-handler := FocusScope {
+            key-pressed(event) => {
+                chrome-visible = true;
+                hide-timer.restart();
+                if (event.text == Key.Escape) {
+                    if (is-fullscreen) { toggle-fullscreen(); }
+                    dismiss-error();
+                    accept
+                } else if (event.text == " ") {
+                    if (image-mode) { toggle-slideshow(); } else { toggle-play(); }
+                    accept
+                } else if (event.text == Key.LeftArrow || event.text == "[") {
+                    if (image-mode) { navigate-image(-1); } else { previous-track(); }
+                    accept
+                } else if (event.text == Key.RightArrow || event.text == "]") {
+                    if (image-mode) { navigate-image(1); } else { next-track(); }
+                    accept
+                } else if (event.modifiers.control && event.text == "f") {
+                    toggle-fullscreen();
+                    accept
+                } else {
+                    reject
+                }
+            }
+        }
+    }
+
+    // Debounced auto-hide: any activity above calls `restart()`, pushing
+    // the fire 2s further out. Left running continuously rather than
+    // started/stopped — re-firing every 2s while genuinely idle is harmless
+    // since it just re-sets `chrome-visible` to what it already is.
+    hide-timer := Timer {
+        interval: 2s;
+        running: true;
+        triggered => { chrome-visible = false; }
+    }
+}
