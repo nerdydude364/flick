@@ -21,6 +21,7 @@ if [ -e "$OUT" ]; then
   exit 1
 fi
 mkdir -p "$OUT"
+mkdir -m 700 -p "$OUT/gnupg-home"
 
 echo "==> Generating RSA4096 signing key for: $NAME <$EMAIL>"
 gpg --homedir "$OUT/gnupg-home" --batch --passphrase '' --quick-generate-key \
