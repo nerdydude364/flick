@@ -3,6 +3,7 @@ use crate::playlist::Queue;
 use crate::thumbnails;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SpriteStatus {
@@ -51,6 +52,9 @@ pub struct AppState {
     pub gallery_generation: u64,
     pub slideshow_on: bool,
     pub slideshow_duration: f64,
+    // Shared handle to the UI slideshow timer (if created). Stored here so
+    // mode-switching logic can stop it when video mode becomes active.
+    pub slideshow_timer: Option<Rc<slint::Timer>>,
     /// Shared across both queues, matching the original's single global
     /// `shuffleOn`/`loopOn` (each queue keeps its own shuffle order, but one
     /// pair of toggles drives both).
@@ -78,6 +82,7 @@ impl AppState {
             gallery_generation: 0,
             slideshow_on: false,
             slideshow_duration: 8.0,
+            slideshow_timer: None,
             shuffle_on: false,
             loop_on: false,
             search_query: String::new(),

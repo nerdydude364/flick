@@ -31,6 +31,9 @@ pub fn toggle_gallery(
     if !state.gallery_open {
         state.slideshow_on = false;
         app.set_slideshow_on(false);
+        if let Some(timer) = &state.slideshow_timer {
+            timer.stop();
+        }
         open_gallery(state, gallery_model, gallery_tx);
     }
     app.set_gallery_open(state.gallery_open);

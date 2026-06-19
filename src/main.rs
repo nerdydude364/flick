@@ -489,6 +489,7 @@ fn wire_image_viewer(
     model: &Rc<VecModel<PlaylistItemData>>,
     gallery_model: &Rc<VecModel<slint::Image>>,
     gallery_tx: &std::sync::mpsc::Sender<ui_bridge::GalleryThumbResult>,
+    slideshow_timer: &Rc<slint::Timer>,
 ) {
     {
         let state = Rc::clone(state);
@@ -506,7 +507,7 @@ fn wire_image_viewer(
     // toggle below). Auto-navigate stops itself (turns the toggle back off)
     // once it can't advance further — port of the original's "reached the
     // end, not looping" branch in `startSlideshow`.
-    let slideshow_timer = Rc::new(slint::Timer::default());
+    let slideshow_timer = Rc::clone(slideshow_timer);
 
     {
         let state = Rc::clone(state);
@@ -815,7 +816,10 @@ fn main() {
     wire_video_underlay(&app, &mpv, &state, &model, &sprite_timer, &sprite_tx);
     wire_playback_controls(&app, &mpv, &state);
     wire_queue_management(&app, &mpv, &state, &model, &sprite_timer, &sprite_tx);
-    wire_image_viewer(&app, &state, &model, &gallery_model, &gallery_tx);
+    // Centralize the slideshow timer so mode switches can stop it reliably.
+    let slideshow_timer = Rc::new(slint::Timer::default());
+    state.borrow_mut().slideshow_timer = Some(Rc::clone(&slideshow_timer));
+    wire_image_viewer(&app, &state, &model, &gallery_model, &gallery_tx, &slideshow_timer);
 
     // Folder scanning runs on a background thread (recursive walk + magic-byte
     // checks shouldn't block the UI); batches come back over this channel and

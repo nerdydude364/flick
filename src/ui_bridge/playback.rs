@@ -78,6 +78,10 @@ pub fn navigate_image_relative(
 /// gallery wasn't open yet, jumps to the first image so there's something to
 /// show, matching `slideshowBtn`'s `if (currentIdx < 0 ...) onNavigate(0)`.
 pub fn toggle_slideshow(app: &AppWindow, state: &mut AppState, model: &VecModel<PlaylistItemData>) {
+    // Only allow toggling slideshow while in Image mode.
+    if state.mode != Mode::Image {
+        return;
+    }
     state.slideshow_on = !state.slideshow_on;
     app.set_slideshow_on(state.slideshow_on);
     if state.slideshow_on && state.image_queue.now_playing().is_none() && !state.image_queue.is_empty() {
@@ -243,6 +247,16 @@ pub fn set_mode(mpv: &Mpv, app: &AppWindow, state: &mut AppState, model: &VecMod
         app.set_playing(false);
     }
     state.mode = mode;
+    // Enforce that slideshow is always off in video mode.
+    if state.mode == Mode::Video {
+        if state.slideshow_on {
+            state.slideshow_on = false;
+            app.set_slideshow_on(false);
+        }
+        if let Some(timer) = &state.slideshow_timer {
+            timer.stop();
+        }
+    }
     app.set_image_mode(mode == Mode::Image);
     if mode == Mode::Image {
         clear_sprite_preview(app);
