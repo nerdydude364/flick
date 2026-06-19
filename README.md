@@ -13,6 +13,19 @@ Point it at a folder of videos and photos and it plays both, with a shared playl
 - **Folder import** — recursively scans a directory in the background, validating real file content (magic bytes) rather than trusting extensions, and streams results into the queue in batches so the UI never blocks.
 - **Drag-to-reorder**, fullscreen with auto-hiding chrome, and full keyboard control (space, arrow keys, `[`/`]`, `Ctrl+F`, `Esc`).
 
+## Installing on Linux (apt)
+
+Debian/Ubuntu (amd64 and arm64) users can install Flick from a signed apt repository instead of downloading the `.deb` by hand:
+
+```sh
+curl -fsSL https://apt.flick.free/pubkey.gpg | sudo gpg --dearmor -o /usr/share/keyrings/flick-archive-keyring.gpg
+echo "deb [signed-by=/usr/share/keyrings/flick-archive-keyring.gpg] https://apt.flick.free stable main" | sudo tee /etc/apt/sources.list.d/flick.list
+sudo apt-get update
+sudo apt-get install flick
+```
+
+Every tagged release re-signs and republishes this repository — see the `publish-apt` job in `.github/workflows/release.yml` and `scripts/publish-apt.sh`.
+
 ## Requirements
 
 - Rust (edition 2024 toolchain — see `Cargo.toml`)
