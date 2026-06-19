@@ -43,6 +43,15 @@ installer-mode = "both"
 # codec libs loaded at runtime rather than linked) may need to be added
 # here once this is actually tested on Linux.
 libs = ["libmpv.so.2"]
+# libpipewire's client lib and its dlopen'd protocol modules are versioned
+# as a matched pair by the host distro — linuxdeploy bundles the client lib
+# (an mpv dep) but can't see the dlopen'd modules, so a bundled client built
+# against one pipewire version segfaults (in
+# libpipewire-module-protocol-native.so) when it talks to a newer/older
+# host's modules at runtime. Same reasoning as never bundling
+# Mesa/Vulkan/GL: must match the host, not the build machine. This is also
+# why AppImage's own community excludelist carries libpipewire-0.3.so.0.
+excluded_libs = ["libpipewire*"]
 
 # File associations — drives the MimeType field in the .desktop file (Linux) and
 # LSHandlerURLMap in Info.plist (macOS).  When Flick is installed, right-clicking
