@@ -1,15 +1,30 @@
 use super::ext::{ext_lower, is_image_file, is_video_file};
 use super::magic::confirm_media_magic;
+use crate::thumbnails::hash::hash_video_file;
 use std::path::{Path, PathBuf};
 
 const SCAN_BATCH_SIZE: usize = 50;
+
+/// One scanned file plus the metadata that's cheap to fetch here on the
+/// background scan thread but expensive enough (a `stat()`, or for videos a
+/// 128KB read + SHA1) that doing it lazily on the UI thread once per file —
+/// which is what `Queue::enqueue` and `AppState::sprite_hash_for` used to do
+/// — blocks the UI for the whole length of a large import.
+pub struct ScannedFile {
+    pub path: PathBuf,
+    pub size: Option<u64>,
+    /// Content hash, only computed for videos — it's the sprite-cache key
+    /// `AppState::sprite_status_for` needs to show the sidebar's ✓/⏳/-
+    /// glyph, and that's the only thing that ever needs it.
+    pub video_hash: Option<String>,
+}
 
 /// Recursively scans `root` for video/image files, validating magic bytes
 /// (port of `confirmMediaMagic`) and delivering results in sorted batches via
 /// `on_batch` — mirrors `walkDir`/`scanFolder` in the Electron app's main.js.
 /// `jwalk` skips hidden files/dirs by default, matching the original's
 /// `entry.name.startsWith('.')` skip.
-pub fn scan_folder(root: &Path, mut on_batch: impl FnMut(Vec<PathBuf>)) {
+pub fn scan_folder(root: &Path, mut on_batch: impl FnMut(Vec<ScannedFile>)) {
     let mut buffer = Vec::with_capacity(SCAN_BATCH_SIZE);
 
     for entry in jwalk::WalkDir::new(root) {
@@ -18,7 +33,8 @@ pub fn scan_folder(root: &Path, mut on_batch: impl FnMut(Vec<PathBuf>)) {
             continue;
         }
         let path = entry.path();
-        if !is_video_file(&path) && !is_image_file(&path) {
+        let is_video = is_video_file(&path);
+        if !is_video && !is_image_file(&path) {
             continue;
         }
         let ext = ext_lower(&path).unwrap_or_default();
@@ -26,16 +42,22 @@ pub fn scan_folder(root: &Path, mut on_batch: impl FnMut(Vec<PathBuf>)) {
             continue;
         }
 
-        buffer.push(path);
+        let size = entry.metadata().ok().map(|m| m.len());
+        let video_hash = is_video.then(|| hash_video_file(&path).ok()).flatten();
+        buffer.push(ScannedFile {
+            path,
+            size,
+            video_hash,
+        });
         if buffer.len() >= SCAN_BATCH_SIZE {
             let mut batch = std::mem::take(&mut buffer);
-            batch.sort();
+            batch.sort_by(|a, b| a.path.cmp(&b.path));
             on_batch(batch);
         }
     }
 
     if !buffer.is_empty() {
-        buffer.sort();
+        buffer.sort_by(|a, b| a.path.cmp(&b.path));
         on_batch(buffer);
     }
 }

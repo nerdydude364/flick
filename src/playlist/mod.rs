@@ -63,17 +63,21 @@ impl Queue {
     /// them (auto-switch mode, autoplay if nothing was playing, re-shuffle if
     /// shuffle is already on — all orchestration in `enqueue()` in app.js that
     /// spans both queues / the player).
+    ///
+    /// Takes each item's size pre-fetched rather than `stat()`-ing it here —
+    /// callers that already know it cheaply (a background folder scan) avoid
+    /// re-doing the syscall on whatever thread calls `enqueue`, which for a
+    /// large import is the UI thread.
     pub fn enqueue(
         &mut self,
-        candidates: impl IntoIterator<Item = (String, PathBuf)>,
+        candidates: impl IntoIterator<Item = (String, PathBuf, Option<u64>)>,
     ) -> Vec<usize> {
         let mut added = Vec::new();
-        for (name, path) in candidates {
+        for (name, path, size_bytes) in candidates {
             if self.paths.insert(path.clone()) {
                 self.next_id += 1;
                 added.push(self.items.len());
                 let name_lower = name.to_lowercase();
-                let size_bytes = std::fs::metadata(&path).map(|m| m.len()).ok();
                 self.items.push(MediaItem {
                     id: self.next_id,
                     name,
@@ -303,8 +307,12 @@ impl Queue {
 mod tests {
     use super::*;
 
-    fn item(name: &str) -> (String, PathBuf) {
-        (name.to_string(), PathBuf::from(format!("/media/{name}")))
+    fn item(name: &str) -> (String, PathBuf, Option<u64>) {
+        (
+            name.to_string(),
+            PathBuf::from(format!("/media/{name}")),
+            None,
+        )
     }
 
     fn queue_with(names: &[&str]) -> Queue {

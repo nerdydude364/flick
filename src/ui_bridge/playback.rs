@@ -183,7 +183,7 @@ fn enqueue_video_paths(
     app: &AppWindow,
     state: &mut AppState,
     model: &VecModel<PlaylistItemData>,
-    named_paths: Vec<(String, PathBuf)>,
+    named_paths: Vec<(String, PathBuf, Option<u64>)>,
 ) -> Option<usize> {
     let had_items_before = !state.queue.is_empty();
     state.queue.enqueue(named_paths);
@@ -198,7 +198,14 @@ fn enqueue_video_paths(
             play_index(mpv, app, state, model, idx);
             return Some(idx);
         }
-    } else {
+    } else if state.mode == Mode::Video {
+        // The sidebar only ever shows whichever queue matches the active
+        // mode (see `rebuild_playlist_model`) — skip the rebuild when it's
+        // not this queue's turn rather than redoing the *other* queue's
+        // identical render. A folder scan with both videos and images
+        // mixed into the same drained batch otherwise rebuilds the model
+        // twice per tick, once from each of `enqueue_video_paths`/
+        // `enqueue_image_paths`, for the entire rest of the import.
         rebuild_playlist_model(state, model);
     }
     None
@@ -211,7 +218,7 @@ fn enqueue_image_paths(
     app: &AppWindow,
     state: &mut AppState,
     model: &VecModel<PlaylistItemData>,
-    named_paths: Vec<(String, PathBuf)>,
+    named_paths: Vec<(String, PathBuf, Option<u64>)>,
 ) {
     let had_items_before = !state.image_queue.is_empty();
     state.image_queue.enqueue(named_paths);
@@ -225,8 +232,11 @@ fn enqueue_image_paths(
             .image_queue
             .reshuffle_keep_current_first(&state.search_query);
         sync_image_viewer_ui(app, state);
-        rebuild_playlist_model(state, model);
-    } else {
+        if state.mode == Mode::Image {
+            rebuild_playlist_model(state, model);
+        }
+    } else if state.mode == Mode::Image {
+        // See the matching comment in `enqueue_video_paths`.
         rebuild_playlist_model(state, model);
     }
 }
@@ -242,11 +252,11 @@ pub fn enqueue_paths(
     app: &AppWindow,
     state: &mut AppState,
     model: &VecModel<PlaylistItemData>,
-    named_paths: Vec<(String, PathBuf)>,
+    named_paths: Vec<(String, PathBuf, Option<u64>)>,
 ) -> Option<usize> {
     let (videos, images): (Vec<_>, Vec<_>) = named_paths
         .into_iter()
-        .partition(|(_, p)| crate::library::is_video_file(p));
+        .partition(|(_, p, _)| crate::library::is_video_file(p));
 
     if !images.is_empty() && videos.is_empty() {
         set_mode(mpv, app, state, model, Mode::Image);

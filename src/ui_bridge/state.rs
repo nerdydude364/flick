@@ -93,6 +93,15 @@ impl AppState {
         }
     }
 
+    /// Seeds the sprite-hash cache with a value already computed elsewhere
+    /// (a folder scan's background thread) so `sprite_hash_for` doesn't
+    /// redo that 128KB-read-plus-SHA1 on the UI thread the first time
+    /// `rebuild_playlist_model` looks up this video's status glyph. A
+    /// no-op if `path` is already cached.
+    pub(crate) fn prime_sprite_hash(&mut self, path: PathBuf, hash: String) {
+        self.sprite_hash.entry(path).or_insert(hash);
+    }
+
     /// Hash for `path`, computed and cached on first lookup.
     pub(crate) fn sprite_hash_for(&mut self, path: &Path) -> Option<String> {
         if let Some(h) = self.sprite_hash.get(path) {
