@@ -458,7 +458,10 @@ fn wire_queue_management(
             let valid = library::filter_valid_media(picked);
             let named = valid
                 .into_iter()
-                .map(|p| (ui_bridge::basename(&p), p))
+                .map(|p| {
+                    let size = std::fs::metadata(&p).ok().map(|m| m.len());
+                    (ui_bridge::basename(&p), p, size)
+                })
                 .collect();
             let played =
                 ui_bridge::enqueue_paths(&mpv, &app, &mut state.borrow_mut(), &model, named);
@@ -492,7 +495,10 @@ fn wire_queue_management(
             let valid = library::filter_valid_media(picked);
             let named = valid
                 .into_iter()
-                .map(|p| (ui_bridge::basename(&p), p))
+                .map(|p| {
+                    let size = std::fs::metadata(&p).ok().map(|m| m.len());
+                    (ui_bridge::basename(&p), p, size)
+                })
                 .collect();
             let played =
                 ui_bridge::enqueue_paths(&mpv, &app, &mut state.borrow_mut(), &model, named);
@@ -677,7 +683,7 @@ fn wire_image_viewer(
 /// scan the picked folder (magic-byte validation included) without blocking
 /// the UI; results stream back over `scan_tx` for the drain timer in `main`
 /// to pick up.
-fn wire_folder_scan(app: &AppWindow, scan_tx: std::sync::mpsc::Sender<Vec<PathBuf>>) {
+fn wire_folder_scan(app: &AppWindow, scan_tx: std::sync::mpsc::Sender<Vec<library::ScannedFile>>) {
     let app_weak = app.as_weak();
     app.on_open_folder(move || {
         if app_weak.upgrade().is_none() {
@@ -930,7 +936,8 @@ fn main() {
     if let Some(path) = std::env::args().nth(1) {
         let path = PathBuf::from(path);
         let name = ui_bridge::basename(&path);
-        state.borrow_mut().queue.enqueue([(name, path)]);
+        let size = std::fs::metadata(&path).ok().map(|m| m.len());
+        state.borrow_mut().queue.enqueue([(name, path, size)]);
     }
 
     wire_video_underlay(&app, &mpv, &state, &model, &sprite_timer, &sprite_tx);
@@ -949,10 +956,12 @@ fn main() {
     );
 
     // Folder scanning runs on a background thread (recursive walk + magic-byte
-    // checks shouldn't block the UI); batches come back over this channel and
-    // get drained on the UI thread by the timer below. `Rc`-based state can't
-    // cross threads, so the channel only ever carries plain `PathBuf`s.
-    let (scan_tx, scan_rx) = std::sync::mpsc::channel::<Vec<PathBuf>>();
+    // checks, plus the size/video-hash `stat()`+SHA1 work — see
+    // `library::ScannedFile` — shouldn't block the UI); batches come back
+    // over this channel and get drained on the UI thread by the timer below.
+    // `Rc`-based state can't cross threads, so the channel only carries
+    // plain `PathBuf`s plus that already-computed metadata.
+    let (scan_tx, scan_rx) = std::sync::mpsc::channel::<Vec<library::ScannedFile>>();
     wire_folder_scan(&app, scan_tx);
 
     {
@@ -988,10 +997,17 @@ fn main() {
                     scanned.extend(batch);
                 }
                 if !scanned.is_empty() {
+                    let mut state_ref = state.borrow_mut();
                     let named = scanned
                         .into_iter()
-                        .map(|p| (ui_bridge::basename(&p), p))
+                        .map(|f| {
+                            if let Some(hash) = f.video_hash {
+                                state_ref.prime_sprite_hash(f.path.clone(), hash);
+                            }
+                            (ui_bridge::basename(&f.path), f.path, f.size)
+                        })
                         .collect();
+                    drop(state_ref);
                     let played = ui_bridge::enqueue_paths(
                         &mpv,
                         &app,
