@@ -14,7 +14,7 @@ identifier = "co.flick.app"
 # back to the Cargo version (tried it: produces an empty
 # CFBundleShortVersionString and a timestamp placeholder instead) — so if
 # you run the package scripts locally, bump this by hand to match first.
-version = "1.1.1"
+version = "1.2.0"
 description = "Lightweight custom video and image player"
 authors = ["Nerdy Dude"]
 publisher = "Nerdy Dude"
@@ -35,7 +35,7 @@ minimum-system-version = "11.0"
 depends = ["libmpv2"]
 
 [nsis]
-install-mode = "both"
+installer-mode = "both"
 
 [appimage]
 # linuxdeploy follows the binary's own ELF dependencies automatically for
