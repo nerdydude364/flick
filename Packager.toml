@@ -31,18 +31,47 @@ binaries = [{ path = "flick", main = true }]
 minimum-system-version = "11.0"
 
 [deb]
-# Debian/Ubuntu package name for libmpv's runtime library (Debian 12+/Ubuntu 22.04+).
-depends = ["libmpv2"]
+# mpv/ffmpeg/libass/libplacebo are statically linked into the flick binary
+# itself (see scripts/mpv-linux-static-build.sh and build.rs's
+# link_mpv_static_linux) — no libmpv2 dependency needed anymore. This list
+# is the binary's *direct* dynamic NEEDED entries (`readelf -d`) that still
+# come from the host system: display/GL, audio servers, and VAAPI/VDPAU
+# hardware-decode client libs, which must match the host rather than be
+# bundled (same rule as the AppImage's libpipewire exclusion below).
+# cargo-packager writes Depends: only from this list (no dpkg-shlibdeps
+# auto-detection), so it needs to stay in sync if NEEDED ever changes —
+# re-derive via `readelf -d target/release/flick | grep NEEDED` if so.
+# libasound2t64 covers Ubuntu 24.04+, where the 64-bit time_t transition
+# dropped the old libasound2 package entirely (no transitional dummy, unlike
+# most other renamed packages in that transition).
+depends = [
+  "libstdc++6",
+  "libfontconfig1",
+  "libharfbuzz0b",
+  "libfribidi0",
+  "libfreetype6",
+  "libx11-6",
+  "libxcb1",
+  "libegl1",
+  "libdrm2",
+  "libva2",
+  "libva-drm2",
+  "libva-x11-2",
+  "libvdpau1",
+  "libasound2t64 | libasound2",
+  "libpulse0",
+  "zlib1g",
+]
 
 [nsis]
 installer-mode = "both"
 
 [appimage]
-# linuxdeploy follows the binary's own ELF dependencies automatically for
-# most things; libmpv's own plugin-style/dlopen'd dependencies (e.g. some
-# codec libs loaded at runtime rather than linked) may need to be added
-# here once this is actually tested on Linux.
-libs = ["libmpv.so.2"]
+# linuxdeploy follows the binary's own ELF dependencies automatically —
+# libmpv.so.2 no longer exists to force-include now that mpv is statically
+# linked (see [deb] above); forcing it here would risk bundling a stray
+# system libmpv.so.2 if one happened to be present on the build runner,
+# silently reintroducing the version-mismatch problem this was meant to fix.
 # libpipewire's client lib and its dlopen'd protocol modules are versioned
 # as a matched pair by the host distro — linuxdeploy bundles the client lib
 # (an mpv dep) but can't see the dlopen'd modules, so a bundled client built

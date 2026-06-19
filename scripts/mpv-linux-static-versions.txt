@@ -1,0 +1,9 @@
+# Pinned source versions for scripts/mpv-linux-static-build.sh.
+# Bumping any of these busts the release.yml actions/cache entry (the cache
+# key hashes this file), so a routine version bump rebuilds from scratch
+# exactly once, then is cached again.
+MPV_VERSION=v0.41.0
+FFMPEG_VERSION=n8.1.1
+LIBASS_VERSION=0.17.4
+LIBPLACEBO_VERSION=v7.360.1
+LCMS2_VERSION=lcms2.16
