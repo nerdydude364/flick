@@ -17,6 +17,22 @@ jobs:
   package:
     name: package (${{ matrix.platform }}-${{ matrix.arch }})
     runs-on: ${{ matrix.runner }}
+    # Linux legs build inside an old-base container (see matrix.container)
+    # so the glibc/library floor baked into flick and mpv's bundled .so deps
+    # stays forward-compatible with older user systems, independent of
+    # whatever glibc the *host* runner itself ships. "" means "no container"
+    # — GitHub Actions treats an empty image name that way.
+    #
+    # Container is ubuntu:22.04, not something older like 20.04: the
+    # libmpv2 crate hardcodes MPV_CLIENT_API_MAJOR=2 and rejects any mpv
+    # reporting a different major client API version (this is the
+    # VersionMismatch bug from the libmpv.so.1 cache-staleness incident).
+    # mpv didn't bump to API major 2 until 0.35.0; Ubuntu 20.04's archive
+    # only has 0.32.0, so building there breaks at startup every time, not
+    # just a glibc problem. 22.04's archive has since picked up a 0.38.0
+    # backport (the libmpv2 package) that does satisfy the check, making
+    # it the oldest distro this project can currently build against.
+    container: ${{ matrix.container }}
     strategy:
       fail-fast: false
       matrix:
@@ -24,22 +40,38 @@ jobs:
           - platform: macos
             arch: arm64
             runner: macos-14
+            container: ""
           - platform: macos
             arch: amd64
             runner: macos-15-intel
+            container: ""
           - platform: linux
             arch: amd64
             runner: ubuntu-24.04
+            container: "ubuntu:22.04"
           - platform: linux
             arch: arm64
             runner: ubuntu-24.04-arm
+            container: "ubuntu:22.04"
           - platform: windows
             arch: amd64
             runner: windows-latest
+            container: ""
           - platform: windows
             arch: arm64
             runner: windows-11-arm
+            container: ""
     steps:
+      # ubuntu:22.04 is a bare image — no git/curl/compiler/mpv until we
+      # install them. Must run before Checkout, since that needs git.
+      - name: Bootstrap container build environment
+        if: matrix.platform == 'linux'
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            curl git build-essential pkg-config perl ca-certificates \
+            libssl-dev mpv libmpv-dev libfuse2
+
       - name: Checkout
         uses: actions/checkout@v4
 
@@ -77,12 +109,6 @@ jobs:
       - name: Install macOS build deps
         if: matrix.platform == 'macos'
         run: brew install mpv pkg-config dylibbundler
-
-      - name: Install Linux build deps
-        if: matrix.platform == 'linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y mpv libmpv-dev pkg-config libfuse2
 
       - name: Install cargo-packager
         run: cargo install --locked cargo-packager
