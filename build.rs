@@ -66,7 +66,10 @@ fn link_mpv() {
 #[cfg(target_os = "linux")]
 fn link_mpv_static_linux() -> bool {
     let arch = std::env::var("MPV_ARCH").unwrap_or_else(|_| {
-        match std::env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default().as_str() {
+        match std::env::var("CARGO_CFG_TARGET_ARCH")
+            .unwrap_or_default()
+            .as_str()
+        {
             "x86_64" => "amd64".to_string(),
             "aarch64" => "arm64".to_string(),
             other => other.to_string(),
@@ -75,7 +78,9 @@ fn link_mpv_static_linux() -> bool {
 
     let dir = std::env::var_os("MPV_STATIC_DIR")
         .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| std::path::PathBuf::from(format!("third_party/mpv-linux-static-{arch}")));
+        .unwrap_or_else(|| {
+            std::path::PathBuf::from(format!("third_party/mpv-linux-static-{arch}"))
+        });
 
     let lib_dir = dir.join("lib");
     if !lib_dir.join("libmpv.a").exists() {
