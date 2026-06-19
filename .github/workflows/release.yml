@@ -29,10 +29,10 @@ jobs:
             runner: macos-15-intel
           - platform: linux
             arch: amd64
-            runner: ubuntu-22.04
+            runner: ubuntu-24.04
           - platform: linux
             arch: arm64
-            runner: ubuntu-22.04-arm
+            runner: ubuntu-24.04-arm
           - platform: windows
             arch: amd64
             runner: windows-latest
@@ -82,7 +82,7 @@ jobs:
         if: matrix.platform == 'linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libmpv-dev pkg-config libfuse2
+          sudo apt-get install -y mpv libmpv-dev pkg-config libfuse2
 
       - name: Install cargo-packager
         run: cargo install --locked cargo-packager
