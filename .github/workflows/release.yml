@@ -199,3 +199,58 @@ jobs:
           name: ${{ github.ref_name }}
           generate_release_notes: true
           files: dist/*
+
+  publish-apt:
+    name: Publish apt repository
+    needs: package
+    runs-on: ubuntu-latest
+    # Overrides (not merges) the contents:write granted at the workflow
+    # level above — this job only needs to mint an OIDC token to assume
+    # the AWS role; it never touches the GitHub release itself.
+    permissions:
+      id-token: write
+      contents: read
+    env:
+      AWS_REGION: us-east-2
+      S3_BUCKET: apt.flick.free
+      CLOUDFRONT_DISTRIBUTION_ID: ECXQ4DRLRKBT9
+    steps:
+      - name: Download Linux .deb artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: flick-linux-*
+          path: deb-artifacts
+          merge-multiple: true
+
+      - name: Install apt repo tooling
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends dpkg-dev gnupg
+
+      - name: Import GPG signing key
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.APT_GPG_PRIVATE_KEY }}
+        run: |
+          echo "$GPG_PRIVATE_KEY" | gpg --batch --import
+          FPR="$(gpg --list-secret-keys --with-colons | awk -F: '/^fpr/ {print $10; exit}')"
+          echo "GPG_KEY_FPR=$FPR" >> "$GITHUB_ENV"
+
+      # role-to-assume requires this job's id-token: write permission above;
+      # the role must trust the GitHub OIDC provider for this repo and grant
+      # s3:GetObject/PutObject/ListBucket/DeleteObject on $S3_BUCKET plus
+      # cloudfront:CreateInvalidation on $CLOUDFRONT_DISTRIBUTION_ID.
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::596319333022:role/github-actions-flick-apt-s3
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Build, sign, and publish apt repo
+        env:
+          DEB_DIR: deb-artifacts
+          GPG_PASSPHRASE: ${{ secrets.APT_GPG_PASSPHRASE }}
+        run: ./scripts/publish-apt.sh
+
+      - name: Invalidate CloudFront cache
+        run: |
+          aws cloudfront create-invalidation \
+            --distribution-id "$CLOUDFRONT_DISTRIBUTION_ID" \
+            --paths "/dists/*" "/pubkey.gpg"
