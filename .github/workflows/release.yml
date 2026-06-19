@@ -53,14 +53,14 @@ jobs:
             arch: arm64
             runner: ubuntu-24.04-arm
             container: "ubuntu:22.04"
-          - platform: windows
-            arch: amd64
-            runner: windows-latest
-            container: ""
-          - platform: windows
-            arch: arm64
-            runner: windows-11-arm
-            container: ""
+          # - platform: windows
+          #   arch: amd64
+          #   runner: windows-latest
+          #   container: ""
+          # - platform: windows
+          #   arch: arm64
+          #   runner: windows-11-arm
+          #   container: ""
     steps:
       # ubuntu:22.04 is a bare image — no git/curl/compiler/mpv until we
       # install them. Must run before Checkout, since that needs git.
@@ -203,6 +203,9 @@ jobs:
       S3_BUCKET: apt.flick.free
       CLOUDFRONT_DISTRIBUTION_ID: ECXQ4DRLRKBT9
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
       - name: Download Linux .deb artifacts
         uses: actions/download-artifact@v4
         with:
