@@ -974,8 +974,21 @@ fn main() {
                 while let Ok(result) = gallery_rx.try_recv() {
                     ui_bridge::apply_gallery_thumb(&state.borrow(), &gallery_model, result);
                 }
+                // Coalesce every batch sitting in the channel into one
+                // `enqueue_paths` call instead of one call per batch. A large
+                // folder scan can flood this channel with hundreds of batches
+                // between ticks, and each call ends in a full
+                // `rebuild_playlist_model` (O(current queue length)) — doing
+                // that per-batch turns a 100k-item import into an O(n^2) pass
+                // that visibly freezes the UI thread. Draining first bounds
+                // the rebuild to at most once per tick no matter how many
+                // batches arrived.
+                let mut scanned = Vec::new();
                 while let Ok(batch) = scan_rx.try_recv() {
-                    let named = batch
+                    scanned.extend(batch);
+                }
+                if !scanned.is_empty() {
+                    let named = scanned
                         .into_iter()
                         .map(|p| (ui_bridge::basename(&p), p))
                         .collect();
