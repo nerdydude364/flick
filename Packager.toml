@@ -14,7 +14,7 @@ identifier = "co.flick.app"
 # back to the Cargo version (tried it: produces an empty
 # CFBundleShortVersionString and a timestamp placeholder instead) — so if
 # you run the package scripts locally, bump this by hand to match first.
-version = "1.2.6"
+version = "1.2.7"
 description = "Lightweight custom video and image player"
 authors = ["Nerdy Dude"]
 publisher = "Nerdy Dude"
@@ -51,7 +51,7 @@ libs = ["libmpv.so.2"]
 # host's modules at runtime. Same reasoning as never bundling
 # Mesa/Vulkan/GL: must match the host, not the build machine. This is also
 # why AppImage's own community excludelist carries libpipewire-0.3.so.0.
-excluded_libs = ["libpipewire*"]
+excluded-libraries = ["libpipewire*"]
 
 # File associations — drives the MimeType field in the .desktop file (Linux) and
 # LSHandlerURLMap in Info.plist (macOS).  When Flick is installed, right-clicking
