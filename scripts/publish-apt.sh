@@ -13,6 +13,8 @@ set -euo pipefail
 : "${S3_BUCKET:?set S3_BUCKET}"
 : "${GPG_KEY_FPR:?set GPG_KEY_FPR}"
 : "${DEB_DIR:?set DEB_DIR (directory containing the .deb files to publish)}"
+# Resolve DEB_DIR once up-front so relative paths survive the temp-dir cd.
+DEB_DIR="$(cd "$DEB_DIR" && pwd)"
 CODENAME="${CODENAME:-stable}"
 COMPONENT="${COMPONENT:-main}"
 ARCHES="${ARCHES:-amd64 arm64}"
@@ -28,7 +30,12 @@ aws s3 sync "s3://$S3_BUCKET/dists" dists --no-progress
 
 echo "==> Adding new .deb(s) to pool/$COMPONENT"
 mkdir -p "pool/$COMPONENT"
-for deb in "$DEB_DIR"/*.deb; do
+debs=("$DEB_DIR"/*.deb)
+if [ "${#debs[@]}" -eq 0 ]; then
+  echo "::error::No .deb files found in DEB_DIR=$DEB_DIR"
+  exit 1
+fi
+for deb in "${debs[@]}"; do
   # Re-derive the canonical Debian filename from the .deb's own control
   # data rather than trusting the incoming filename — dpkg-scanpackages's
   # --arch filter below matches on the `_<arch>.deb` filename suffix, and

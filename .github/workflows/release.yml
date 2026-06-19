@@ -236,7 +236,7 @@ jobs:
 
       - name: Build, sign, and publish apt repo
         env:
-          DEB_DIR: deb-artifacts
+          DEB_DIR: ${{ github.workspace }}/deb-artifacts
           GPG_PASSPHRASE: ${{ secrets.APT_GPG_PASSPHRASE }}
         run: ./scripts/publish-apt.sh
 
