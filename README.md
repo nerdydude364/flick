@@ -31,9 +31,10 @@ Every tagged release re-signs and republishes this repository — see the `publi
 - Rust (edition 2024 toolchain — see `Cargo.toml`)
 - A system install of **libmpv**:
   - macOS: `brew install mpv pkg-config`
-  - Linux: `libmpv2`/`libmpv-dev` (or distro equivalent)
+  - Linux: `libmpv2`/`libmpv-dev` (or distro equivalent) for local `cargo build`/`run`
   - Windows: run `./scripts/mpv-windows-setup.sh` (downloads shinchiro's libmpv dev + runtime builds)
   - `build.rs` locates the library via `pkg-config` on Unix, falling back to a few common lib dirs, or `MPV_DEV_DIR` / `third_party/mpv-windows-*` on Windows.
+  - Linux **release** builds instead statically link a pinned mpv/ffmpeg/libass/libplacebo built from source via `./scripts/mpv-linux-static-build.sh`, so published `.deb`/`.AppImage` artifacts don't depend on whatever mpv version (if any) the target machine happens to have — see `link_mpv_static_linux` in `build.rs`.
 
 ## Building & running
 
@@ -98,6 +99,6 @@ Background work (folder scanning, sprite generation) runs on plain OS threads an
 
 ## Known limitations
 
-- `cargo build`/`run` are confirmed working on Linux/amd64 (libmpv2); the packaged `.deb`/`.AppImage` outputs themselves haven't been run yet (see the checklist printed at the end of `scripts/package-linux.sh`).
+- The packaged Linux `.deb`/`.AppImage` statically link mpv/ffmpeg/libass/libplacebo, so they have no runtime dependency on the target's own mpv version — verified by installing/running both on clean Ubuntu 22.04 and 24.04 containers (no mpv installed at all) and the AppImage on Fedora, with no mpv-related dynamic dependency in `readelf -d`/`ldd` output on any of them.
 - Progress-bar/volume scrubbing seeks on every drag tick rather than only on release.
 - Shuffle and loop are single global toggles shared by both the video and image queues (each queue keeps its own shuffle order, but one pair of switches drives both).

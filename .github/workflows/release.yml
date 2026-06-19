@@ -18,20 +18,22 @@ jobs:
     name: package (${{ matrix.platform }}-${{ matrix.arch }})
     runs-on: ${{ matrix.runner }}
     # Linux legs build inside an old-base container (see matrix.container)
-    # so the glibc/library floor baked into flick and mpv's bundled .so deps
-    # stays forward-compatible with older user systems, independent of
-    # whatever glibc the *host* runner itself ships. "" means "no container"
-    # — GitHub Actions treats an empty image name that way.
+    # so the glibc/library floor baked into flick stays forward-compatible
+    # with older user systems, independent of whatever glibc the *host*
+    # runner itself ships. "" means "no container" — GitHub Actions treats
+    # an empty image name that way.
     #
-    # Container is ubuntu:22.04, not something older like 20.04: the
-    # libmpv2 crate hardcodes MPV_CLIENT_API_MAJOR=2 and rejects any mpv
-    # reporting a different major client API version (this is the
-    # VersionMismatch bug from the libmpv.so.1 cache-staleness incident).
-    # mpv didn't bump to API major 2 until 0.35.0; Ubuntu 20.04's archive
-    # only has 0.32.0, so building there breaks at startup every time, not
-    # just a glibc problem. 22.04's archive has since picked up a 0.38.0
-    # backport (the libmpv2 package) that does satisfy the check, making
-    # it the oldest distro this project can currently build against.
+    # mpv itself no longer depends on this container's apt archive at all:
+    # scripts/mpv-linux-static-build.sh builds a pinned mpv/ffmpeg/libass/
+    # libplacebo from source and statically links it into the flick binary
+    # (see build.rs's link_mpv_static_linux), specifically so the target
+    # machine's own libmpv — whatever version or build that happens to be,
+    # or whether it's installed at all — can no longer cause the
+    # "VersionMismatch" failure that motivated this (libmpv2-sys hardcodes
+    # MPV_CLIENT_API_MAJOR=2 and rejects any other major version reported
+    # by a *dynamically* loaded libmpv at runtime; static linking removes
+    # that runtime dependency entirely). ubuntu:22.04 is kept as the
+    # container base purely for the glibc floor below, not for mpv's sake.
     container: ${{ matrix.container }}
     strategy:
       fail-fast: false
@@ -62,15 +64,28 @@ jobs:
           #   runner: windows-11-arm
           #   container: ""
     steps:
-      # ubuntu:22.04 is a bare image — no git/curl/compiler/mpv until we
-      # install them. Must run before Checkout, since that needs git.
+      # ubuntu:22.04 is a bare image — no git/curl/compiler until we install
+      # them. Must run before Checkout, since that needs git. No `mpv`/
+      # `libmpv-dev` here anymore — scripts/mpv-linux-static-build.sh builds
+      # mpv from source instead (see the container comment above), so this
+      # only needs: build tooling for that script, and -dev headers for the
+      # handful of libraries that stay dynamically linked (X11/EGL/GL, ALSA/
+      # PulseAudio/PipeWire, VAAPI/VDPAU — display/audio-server client libs
+      # that must match the *host*, not the build machine, same rule
+      # Packager.toml already applies to libpipewire).
       - name: Bootstrap container build environment
         if: matrix.platform == 'linux'
         run: |
           apt-get update
           apt-get install -y --no-install-recommends \
             curl git build-essential pkg-config perl ca-certificates \
-            libssl-dev libfontconfig1-dev mpv libmpv-dev libfuse2 file
+            libssl-dev libfontconfig1-dev libfuse2 file \
+            nasm cmake autoconf automake libtool python3 python3-pip ninja-build \
+            zlib1g-dev libharfbuzz-dev libfribidi-dev libfreetype-dev libfontconfig-dev \
+            libx11-dev libwayland-dev libegl1-mesa-dev libgl1-mesa-dev libxkbcommon-dev \
+            libasound2-dev libpulse-dev libpipewire-0.3-dev libdrm-dev libva-dev libvdpau-dev
+          # Ubuntu 22.04's apt meson is 0.61.2; mpv 0.41.0 requires >=1.3.0.
+          pip3 install --quiet 'meson>=1.3.0'
 
       - name: Checkout
         uses: actions/checkout@v4
@@ -88,8 +103,26 @@ jobs:
           # first populated, so it kept skipping relinking and CI kept
           # repackaging the stale .so.1-linked binary release after
           # release, surfacing as "VersionMismatch" at runtime. Bump this
-          # suffix again if a similar staleness issue ever recurs.
+          # suffix again if a similar staleness issue ever recurs. This
+          # specific incident class can no longer recur on Linux now that
+          # mpv is statically linked from a pinned source build rather than
+          # resolved against the container's system libmpv at build time.
           key: ${{ matrix.platform }}-${{ matrix.arch }}-v2
+
+      # Builds ffmpeg/libass/libplacebo/mpv from source (~15-30 min cold).
+      # Cache key hashes the version-pins file, so a routine release with no
+      # version bump restores instantly; bumping any pinned version rebuilds
+      # once, then is cached again under the new key.
+      - name: Cache static mpv build
+        if: matrix.platform == 'linux'
+        uses: actions/cache@v4
+        with:
+          path: third_party/mpv-linux-static-${{ matrix.arch }}
+          key: mpv-static-${{ matrix.arch }}-${{ hashFiles('scripts/mpv-linux-static-versions.txt') }}-v1
+
+      - name: Build static mpv (Linux)
+        if: matrix.platform == 'linux'
+        run: ./scripts/mpv-linux-static-build.sh
 
       - name: Verify tag matches Cargo.toml version
         shell: bash
