@@ -97,12 +97,30 @@ jobs:
           APPIMAGE_EXTRACT_AND_RUN: "1"
         run: ./scripts/package-linux.sh
 
+      - name: Download and Extract libmpv
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri "https://github.com" -OutFile "mpv-dev.7z"
+          # Ensure 7zip is installed on the runner and extract the dll
+          7z x mpv-dev.7z -o"mpv-extracted"
+          # Copy the DLL to a central location
+          New-Item -ItemType Directory -Force -Path "C:\mpv"
+          Copy-Item -Path "mpv-extracted\libmpv-2.dll" -Destination "C:\mpv\libmpv-2.dll"
+          Copy-Item -Path "mpv-extracted\mpv.lib" -Destination "C:\mpv\mpv.lib"
+
+      - name: Set libmpv Environment Variables
+        if: matrix.platform == 'windows'
+        run: |
+          echo "MPV_SOURCE=C:\mpv" | Out-File -Encoding utf8 -Append -FilePath $env:GITHUB_ENV
+          echo "LIBCLANG_PATH=C:\Program Files\Microsoft Visual Studio\2022\Enterprise\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin" | Out-File -Encoding utf8 -Append -FilePath $env:GITHUB_ENV
+
       - name: Package (Windows)
         if: matrix.platform == 'windows'
-        shell: bash
+        shell: pwsh
         env:
           MPV_ARCH: ${{ matrix.arch }}
-        run: ./scripts/package-windows.sh
+        run: ./scripts/package-windows.ps1
 
       - name: Collect release artifacts
         shell: bash
