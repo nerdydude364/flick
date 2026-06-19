@@ -308,7 +308,11 @@ mod tests {
     use super::*;
 
     fn item(name: &str) -> (String, PathBuf, Option<u64>) {
-        (name.to_string(), PathBuf::from(format!("/media/{name}")), None)
+        (
+            name.to_string(),
+            PathBuf::from(format!("/media/{name}")),
+            None,
+        )
     }
 
     fn queue_with(names: &[&str]) -> Queue {
