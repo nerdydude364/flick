@@ -107,7 +107,9 @@ impl AppState {
     /// `checkSpriteStatus`/`sprite:status`) the first time, then trusts the
     /// in-memory cache for `Done`/`InProgress` afterward.
     pub(crate) fn sprite_status_for(&mut self, path: &Path) -> SpriteStatus {
-        let Some(hash) = self.sprite_hash_for(path) else { return SpriteStatus::NotStarted };
+        let Some(hash) = self.sprite_hash_for(path) else {
+            return SpriteStatus::NotStarted;
+        };
         if let Some(status) = self.sprite_status.get(&hash)
             && *status == SpriteStatus::Done
         {
@@ -117,6 +119,9 @@ impl AppState {
             self.sprite_status.insert(hash, SpriteStatus::Done);
             return SpriteStatus::Done;
         }
-        self.sprite_status.get(&hash).copied().unwrap_or(SpriteStatus::NotStarted)
+        self.sprite_status
+            .get(&hash)
+            .copied()
+            .unwrap_or(SpriteStatus::NotStarted)
     }
 }

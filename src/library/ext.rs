@@ -1,10 +1,12 @@
 use std::path::Path;
 
-pub const VIDEO_EXTS: &[&str] =
-    &["mp4", "webm", "ogg", "ogv", "mov", "mkv", "avi", "m4v", "mts", "ts", "wmv", "flv"];
+pub const VIDEO_EXTS: &[&str] = &[
+    "mp4", "webm", "ogg", "ogv", "mov", "mkv", "avi", "m4v", "mts", "ts", "wmv", "flv",
+];
 
-pub const IMAGE_EXTS: &[&str] =
-    &["jpg", "jpeg", "png", "gif", "webp", "bmp", "avif", "tiff", "tif", "svg"];
+pub const IMAGE_EXTS: &[&str] = &[
+    "jpg", "jpeg", "png", "gif", "webp", "bmp", "avif", "tiff", "tif", "svg",
+];
 
 pub(crate) fn ext_lower(path: &Path) -> Option<String> {
     path.extension().map(|e| e.to_string_lossy().to_lowercase())

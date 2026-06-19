@@ -14,7 +14,7 @@ use libmpv2::{
 };
 use slint::VecModel;
 use std::cell::RefCell;
-use std::ffi::{c_void, CStr, CString};
+use std::ffi::{CStr, CString, c_void};
 use std::path::PathBuf;
 use std::rc::Rc;
 use ui_bridge::AppState;
@@ -29,7 +29,9 @@ use ui_bridge::AppState;
 struct ProcAddrCtx(*const dyn Fn(&CStr) -> *const c_void);
 
 fn mpv_get_proc_address(ctx: &ProcAddrCtx, name: &str) -> *mut c_void {
-    let Ok(cname) = CString::new(name) else { return std::ptr::null_mut() };
+    let Ok(cname) = CString::new(name) else {
+        return std::ptr::null_mut();
+    };
     let f: &dyn Fn(&CStr) -> *const c_void = unsafe { &*ctx.0 };
     f(&cname) as *mut c_void
 }
@@ -61,9 +63,10 @@ impl MpvUnderlay {
         // `Mpv::create_render_context` below, while the borrow is still actually
         // valid — see the struct doc comment for the rest of the soundness case.
         let proc_addr_ctx = ProcAddrCtx(unsafe {
-            std::mem::transmute::<&dyn Fn(&CStr) -> *const c_void, *const dyn Fn(&CStr) -> *const c_void>(
-                get_proc_address,
-            )
+            std::mem::transmute::<
+                &dyn Fn(&CStr) -> *const c_void,
+                *const dyn Fn(&CStr) -> *const c_void,
+            >(get_proc_address)
         });
         let mut render_context = mpv
             .create_render_context(vec![
@@ -91,7 +94,11 @@ impl MpvUnderlay {
         // SAFETY: see struct doc comment above.
         let render_context: RenderContext<'static> = unsafe { std::mem::transmute(render_context) };
 
-        Self { render_context, _mpv_keep_alive: mpv, gl }
+        Self {
+            render_context,
+            _mpv_keep_alive: mpv,
+            gl,
+        }
     }
 
     fn render(&self, width: i32, height: i32) {
@@ -125,7 +132,9 @@ fn start_slideshow_timer(
         slint::TimerMode::Repeated,
         std::time::Duration::from_secs_f64(duration_secs.max(0.1)),
         move || {
-            let Some(app) = app_weak.upgrade() else { return };
+            let Some(app) = app_weak.upgrade() else {
+                return;
+            };
             let mut state_ref = state.borrow_mut();
             if !state_ref.slideshow_on {
                 return;
@@ -163,9 +172,15 @@ fn wire_video_underlay(
         .set_rendering_notifier(move |rendering_state, graphics_api| match rendering_state {
             slint::RenderingState::RenderingSetup => {
                 let slint::GraphicsAPI::NativeOpenGL { get_proc_address } = graphics_api else {
-                    panic!("flick's native rewrite requires Slint's OpenGL renderer (femtovg backend)");
+                    panic!(
+                        "flick's native rewrite requires Slint's OpenGL renderer (femtovg backend)"
+                    );
                 };
-                underlay = Some(MpvUnderlay::new(get_proc_address, Rc::clone(&mpv), app_weak.clone()));
+                underlay = Some(MpvUnderlay::new(
+                    get_proc_address,
+                    Rc::clone(&mpv),
+                    app_weak.clone(),
+                ));
                 // Must load the file only *after* the render context exists —
                 // loading earlier means mpv tries to init `vo=libmpv` with no
                 // render context attached yet, fails ("No render context set"),
@@ -217,7 +232,9 @@ fn wire_video_underlay(
             }
             _ => {}
         })
-        .expect("Unable to set rendering notifier (does this Slint backend support OpenGL underlays?)");
+        .expect(
+            "Unable to set rendering notifier (does this Slint backend support OpenGL underlays?)",
+        );
 }
 
 /// Wires the bottom transport bar's mpv-backed controls: play/pause, seeking,
@@ -228,7 +245,9 @@ fn wire_playback_controls(app: &AppWindow, mpv: &Rc<Mpv>, state: &Rc<RefCell<App
         let mpv = Rc::clone(mpv);
         let app_weak = app.as_weak();
         app.on_toggle_play(move || {
-            let Some(app) = app_weak.upgrade() else { return };
+            let Some(app) = app_weak.upgrade() else {
+                return;
+            };
             let now_playing = !app.get_playing();
             if !ui_bridge::log_mpv_err("toggle play", mpv.set_property("pause", !now_playing)) {
                 return;
@@ -240,7 +259,10 @@ fn wire_playback_controls(app: &AppWindow, mpv: &Rc<Mpv>, state: &Rc<RefCell<App
     {
         let mpv = Rc::clone(mpv);
         app.on_seek_relative(move |seconds| {
-            ui_bridge::log_mpv_err("seek", mpv.command("seek", &[&seconds.to_string(), "relative"]));
+            ui_bridge::log_mpv_err(
+                "seek",
+                mpv.command("seek", &[&seconds.to_string(), "relative"]),
+            );
         });
     }
 
@@ -268,7 +290,9 @@ fn wire_playback_controls(app: &AppWindow, mpv: &Rc<Mpv>, state: &Rc<RefCell<App
         let state = Rc::clone(state);
         let app_weak = app.as_weak();
         app.on_seek_to_ratio(move |ratio| {
-            let Some(app) = app_weak.upgrade() else { return };
+            let Some(app) = app_weak.upgrade() else {
+                return;
+            };
             ui_bridge::handle_progress_click(&mpv, &app, &mut state.borrow_mut(), ratio);
         });
     }
@@ -278,7 +302,9 @@ fn wire_playback_controls(app: &AppWindow, mpv: &Rc<Mpv>, state: &Rc<RefCell<App
         let state = Rc::clone(state);
         let app_weak = app.as_weak();
         app.on_toggle_ab_loop(move || {
-            let Some(app) = app_weak.upgrade() else { return };
+            let Some(app) = app_weak.upgrade() else {
+                return;
+            };
             ui_bridge::toggle_ab_loop(&mpv, &app, &mut state.borrow_mut());
         });
     }
@@ -301,14 +327,20 @@ fn wire_playback_controls(app: &AppWindow, mpv: &Rc<Mpv>, state: &Rc<RefCell<App
         let speed_idx = Rc::new(RefCell::new(2usize)); // start at 1.0x
         let app_weak = app.as_weak();
         app.on_cycle_speed(move || {
-            let Some(app) = app_weak.upgrade() else { return };
+            let Some(app) = app_weak.upgrade() else {
+                return;
+            };
             let mut idx = speed_idx.borrow_mut();
             *idx = (*idx + 1) % speeds.len();
             let speed = speeds[*idx];
             if !ui_bridge::log_mpv_err("speed change", mpv.set_property("speed", speed)) {
                 return;
             }
-            let text = if speed == speed.trunc() { format!("{speed:.0}x") } else { format!("{speed}x") };
+            let text = if speed == speed.trunc() {
+                format!("{speed:.0}x")
+            } else {
+                format!("{speed}x")
+            };
             app.set_playback_speed_text(text.into());
         });
     }
@@ -317,8 +349,10 @@ fn wire_playback_controls(app: &AppWindow, mpv: &Rc<Mpv>, state: &Rc<RefCell<App
         let mpv = Rc::clone(mpv);
         app.on_take_screenshot(move || {
             let dir = dirs::picture_dir().unwrap_or_else(std::env::temp_dir);
-            let timestamp =
-                std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+            let timestamp = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
             let path = dir.join(format!("Flick-Screenshot-{timestamp}.png"));
             ui_bridge::log_mpv_err(
                 "screenshot",
@@ -330,8 +364,13 @@ fn wire_playback_controls(app: &AppWindow, mpv: &Rc<Mpv>, state: &Rc<RefCell<App
     {
         let mpv = Rc::clone(mpv);
         app.on_add_subtitle(move || {
-            let Some(path) = dialogs::open_subtitle_file() else { return };
-            ui_bridge::log_mpv_err("add subtitle", mpv.command("sub-add", &[&path.to_string_lossy(), "select"]));
+            let Some(path) = dialogs::open_subtitle_file() else {
+                return;
+            };
+            ui_bridge::log_mpv_err(
+                "add subtitle",
+                mpv.command("sub-add", &[&path.to_string_lossy(), "select"]),
+            );
         });
     }
 
@@ -339,7 +378,9 @@ fn wire_playback_controls(app: &AppWindow, mpv: &Rc<Mpv>, state: &Rc<RefCell<App
         let app_weak = app.as_weak();
         let state = Rc::clone(state);
         app.on_toggle_loop(move || {
-            let Some(app) = app_weak.upgrade() else { return };
+            let Some(app) = app_weak.upgrade() else {
+                return;
+            };
             let mut state = state.borrow_mut();
             state.loop_on = !state.loop_on;
             app.set_loop_on(state.loop_on);
@@ -379,8 +420,16 @@ fn wire_queue_management(
         let model = Rc::clone(model);
         let app_weak = app.as_weak();
         app.on_remove_item(move |queue_index| {
-            let Some(app) = app_weak.upgrade() else { return };
-            ui_bridge::remove_item(&mpv, &app, &mut state.borrow_mut(), &model, queue_index as usize);
+            let Some(app) = app_weak.upgrade() else {
+                return;
+            };
+            ui_bridge::remove_item(
+                &mpv,
+                &app,
+                &mut state.borrow_mut(),
+                &model,
+                queue_index as usize,
+            );
         });
     }
 
@@ -400,11 +449,19 @@ fn wire_queue_management(
         let sprite_timer = Rc::clone(sprite_timer);
         let sprite_tx = sprite_tx.clone();
         app.on_open_videos(move || {
-            let Some(app) = app_weak.upgrade() else { return };
-            let Some(picked) = dialogs::open_media_files() else { return };
+            let Some(app) = app_weak.upgrade() else {
+                return;
+            };
+            let Some(picked) = dialogs::open_media_files() else {
+                return;
+            };
             let valid = library::filter_valid_media(picked);
-            let named = valid.into_iter().map(|p| (ui_bridge::basename(&p), p)).collect();
-            let played = ui_bridge::enqueue_paths(&mpv, &app, &mut state.borrow_mut(), &model, named);
+            let named = valid
+                .into_iter()
+                .map(|p| (ui_bridge::basename(&p), p))
+                .collect();
+            let played =
+                ui_bridge::enqueue_paths(&mpv, &app, &mut state.borrow_mut(), &model, named);
             if let Some(idx) = played {
                 ui_bridge::schedule_sprite_generation(
                     app_weak.clone(),
@@ -426,11 +483,19 @@ fn wire_queue_management(
         let sprite_timer = Rc::clone(sprite_timer);
         let sprite_tx = sprite_tx.clone();
         app.on_open_images(move || {
-            let Some(app) = app_weak.upgrade() else { return };
-            let Some(picked) = dialogs::open_media_files() else { return };
+            let Some(app) = app_weak.upgrade() else {
+                return;
+            };
+            let Some(picked) = dialogs::open_media_files() else {
+                return;
+            };
             let valid = library::filter_valid_media(picked);
-            let named = valid.into_iter().map(|p| (ui_bridge::basename(&p), p)).collect();
-            let played = ui_bridge::enqueue_paths(&mpv, &app, &mut state.borrow_mut(), &model, named);
+            let named = valid
+                .into_iter()
+                .map(|p| (ui_bridge::basename(&p), p))
+                .collect();
+            let played =
+                ui_bridge::enqueue_paths(&mpv, &app, &mut state.borrow_mut(), &model, named);
             if let Some(idx) = played {
                 ui_bridge::schedule_sprite_generation(
                     app_weak.clone(),
@@ -450,10 +515,15 @@ fn wire_queue_management(
         let model = Rc::clone(model);
         let app_weak = app.as_weak();
         app.on_toggle_mode(move || {
-            let Some(app) = app_weak.upgrade() else { return };
+            let Some(app) = app_weak.upgrade() else {
+                return;
+            };
             let mut state = state.borrow_mut();
-            let new_mode =
-                if state.mode == ui_bridge::Mode::Video { ui_bridge::Mode::Image } else { ui_bridge::Mode::Video };
+            let new_mode = if state.mode == ui_bridge::Mode::Video {
+                ui_bridge::Mode::Image
+            } else {
+                ui_bridge::Mode::Video
+            };
             ui_bridge::set_mode(&mpv, &app, &mut state, &model, new_mode);
         });
     }
@@ -464,7 +534,9 @@ fn wire_queue_management(
         let model = Rc::clone(model);
         let app_weak = app.as_weak();
         app.on_clear_queue(move || {
-            let Some(app) = app_weak.upgrade() else { return };
+            let Some(app) = app_weak.upgrade() else {
+                return;
+            };
             let mut state = state.borrow_mut();
             if state.mode == ui_bridge::Mode::Video {
                 state.queue.clear();
@@ -496,7 +568,9 @@ fn wire_image_viewer(
         let model = Rc::clone(model);
         let app_weak = app.as_weak();
         app.on_navigate_image(move |delta| {
-            let Some(app) = app_weak.upgrade() else { return };
+            let Some(app) = app_weak.upgrade() else {
+                return;
+            };
             ui_bridge::navigate_image_relative(&app, &mut state.borrow_mut(), &model, delta);
         });
     }
@@ -516,7 +590,9 @@ fn wire_image_viewer(
         let slideshow_timer = Rc::clone(&slideshow_timer);
         let app_weak = app.as_weak();
         app.on_toggle_gallery(move || {
-            let Some(app) = app_weak.upgrade() else { return };
+            let Some(app) = app_weak.upgrade() else {
+                return;
+            };
             ui_bridge::toggle_gallery(&app, &mut state.borrow_mut(), &gallery_model, &gallery_tx);
             if !app.get_slideshow_on() {
                 slideshow_timer.stop();
@@ -529,7 +605,9 @@ fn wire_image_viewer(
         let model = Rc::clone(model);
         let app_weak = app.as_weak();
         app.on_gallery_item_clicked(move |pos| {
-            let Some(app) = app_weak.upgrade() else { return };
+            let Some(app) = app_weak.upgrade() else {
+                return;
+            };
             let mut state = state.borrow_mut();
             if let Some(&queue_idx) = state.gallery_order.get(pos as usize) {
                 ui_bridge::show_image_at(&app, &mut state, &model, queue_idx);
@@ -543,7 +621,9 @@ fn wire_image_viewer(
         let slideshow_timer = Rc::clone(&slideshow_timer);
         let app_weak = app.as_weak();
         app.on_toggle_slideshow(move || {
-            let Some(app) = app_weak.upgrade() else { return };
+            let Some(app) = app_weak.upgrade() else {
+                return;
+            };
             ui_bridge::toggle_slideshow(&app, &mut state.borrow_mut(), &model);
             if app.get_slideshow_on() {
                 let duration = state.borrow().slideshow_duration;
@@ -560,7 +640,9 @@ fn wire_image_viewer(
         let slideshow_timer = Rc::clone(&slideshow_timer);
         let app_weak = app.as_weak();
         app.on_slideshow_duration_changed(move |seconds| {
-            let Some(app) = app_weak.upgrade() else { return };
+            let Some(app) = app_weak.upgrade() else {
+                return;
+            };
             ui_bridge::set_slideshow_duration(&app, &mut state.borrow_mut(), seconds as f64);
             if app.get_slideshow_on() {
                 let duration = state.borrow().slideshow_duration;
@@ -577,10 +659,16 @@ fn wire_image_viewer(
     {
         let state = Rc::clone(state);
         let app_weak = app.as_weak();
-        gif_timer.start(slint::TimerMode::Repeated, std::time::Duration::from_millis(33), move || {
-            let Some(app) = app_weak.upgrade() else { return };
-            ui_bridge::tick_gif_animation(&app, &mut state.borrow_mut());
-        });
+        gif_timer.start(
+            slint::TimerMode::Repeated,
+            std::time::Duration::from_millis(33),
+            move || {
+                let Some(app) = app_weak.upgrade() else {
+                    return;
+                };
+                ui_bridge::tick_gif_animation(&app, &mut state.borrow_mut());
+            },
+        );
     }
     std::mem::forget(gif_timer);
 }
@@ -595,7 +683,9 @@ fn wire_folder_scan(app: &AppWindow, scan_tx: std::sync::mpsc::Sender<Vec<PathBu
         if app_weak.upgrade().is_none() {
             return;
         }
-        let Some(folder) = dialogs::open_folder() else { return };
+        let Some(folder) = dialogs::open_folder() else {
+            return;
+        };
         let tx = scan_tx.clone();
         std::thread::spawn(move || {
             library::scan_folder(&folder, |batch| {
@@ -623,7 +713,9 @@ fn wire_playlist_navigation(
         let sprite_timer = Rc::clone(sprite_timer);
         let sprite_tx = sprite_tx.clone();
         app.on_item_clicked(move |queue_index| {
-            let Some(app) = app_weak.upgrade() else { return };
+            let Some(app) = app_weak.upgrade() else {
+                return;
+            };
             let index = queue_index as usize;
             if state.borrow().mode == ui_bridge::Mode::Video {
                 ui_bridge::play_index(&mpv, &app, &mut state.borrow_mut(), &model, index);
@@ -645,15 +737,23 @@ fn wire_playlist_navigation(
         let state = Rc::clone(state);
         let app_weak = app.as_weak();
         app.on_list_item_hovered(move |queue_index, _display_index| {
-            let Some(app) = app_weak.upgrade() else { return };
-            ui_bridge::show_list_sprite_preview(&app, &mut state.borrow_mut(), queue_index as usize);
+            let Some(app) = app_weak.upgrade() else {
+                return;
+            };
+            ui_bridge::show_list_sprite_preview(
+                &app,
+                &mut state.borrow_mut(),
+                queue_index as usize,
+            );
         });
     }
 
     {
         let app_weak = app.as_weak();
         app.on_list_item_unhovered(move || {
-            let Some(app) = app_weak.upgrade() else { return };
+            let Some(app) = app_weak.upgrade() else {
+                return;
+            };
             ui_bridge::hide_list_sprite_preview(&app);
         });
     }
@@ -674,7 +774,9 @@ fn wire_playlist_navigation(
         let model = Rc::clone(model);
         let app_weak = app.as_weak();
         app.on_toggle_shuffle(move || {
-            let Some(app) = app_weak.upgrade() else { return };
+            let Some(app) = app_weak.upgrade() else {
+                return;
+            };
             let mut state = state.borrow_mut();
             state.shuffle_on = !state.shuffle_on;
             app.set_shuffle_on(state.shuffle_on);
@@ -710,10 +812,14 @@ fn wire_playlist_navigation(
         let sprite_timer = Rc::clone(sprite_timer);
         let sprite_tx = sprite_tx.clone();
         app.on_previous_track(move || {
-            let Some(app) = app_weak.upgrade() else { return };
+            let Some(app) = app_weak.upgrade() else {
+                return;
+            };
             let prev = {
                 let state = state.borrow();
-                state.queue.playable_prev(&state.search_query, state.shuffle_on, state.loop_on)
+                state
+                    .queue
+                    .playable_prev(&state.search_query, state.shuffle_on, state.loop_on)
             };
             if let Some(idx) = prev {
                 ui_bridge::play_index(&mpv, &app, &mut state.borrow_mut(), &model, idx);
@@ -737,10 +843,14 @@ fn wire_playlist_navigation(
         let sprite_timer = Rc::clone(sprite_timer);
         let sprite_tx = sprite_tx.clone();
         app.on_next_track(move || {
-            let Some(app) = app_weak.upgrade() else { return };
+            let Some(app) = app_weak.upgrade() else {
+                return;
+            };
             let next = {
                 let state = state.borrow();
-                state.queue.playable_next(&state.search_query, state.shuffle_on, state.loop_on)
+                state
+                    .queue
+                    .playable_next(&state.search_query, state.shuffle_on, state.loop_on)
             };
             if let Some(idx) = next {
                 ui_bridge::play_index(&mpv, &app, &mut state.borrow_mut(), &model, idx);
@@ -775,17 +885,27 @@ fn main() {
     // Separate client purely for observing playback properties + catching
     // playback errors — keeps this independent of the main `mpv` handle used
     // for commands, matching the pattern libmpv's own examples use.
-    let mpv_events = mpv.create_client(None).expect("failed to create mpv event client");
+    let mpv_events = mpv
+        .create_client(None)
+        .expect("failed to create mpv event client");
     let _ = mpv_events.disable_deprecated_events();
-    mpv_events.observe_property("time-pos", libmpv2::Format::Double, 1).expect("observe time-pos");
-    mpv_events.observe_property("duration", libmpv2::Format::Double, 2).expect("observe duration");
-    mpv_events.observe_property("pause", libmpv2::Format::Flag, 3).expect("observe pause");
+    mpv_events
+        .observe_property("time-pos", libmpv2::Format::Double, 1)
+        .expect("observe time-pos");
+    mpv_events
+        .observe_property("duration", libmpv2::Format::Double, 2)
+        .expect("observe duration");
+    mpv_events
+        .observe_property("pause", libmpv2::Format::Flag, 3)
+        .expect("observe pause");
     // Drives queue auto-advance on natural end-of-file — see the
     // "eof-reached" handling in the drain timer below. `keep-open=yes`
     // (set at Mpv::with_initializer below) means mpv parks on the last
     // frame instead of unloading, so this flag is the only signal that a
     // track actually finished rather than being stopped/cleared.
-    mpv_events.observe_property("eof-reached", libmpv2::Format::Flag, 4).expect("observe eof-reached");
+    mpv_events
+        .observe_property("eof-reached", libmpv2::Format::Flag, 4)
+        .expect("observe eof-reached");
 
     let state = Rc::new(RefCell::new(AppState::new()));
     let model = Rc::new(VecModel::default());
@@ -819,7 +939,14 @@ fn main() {
     // Centralize the slideshow timer so mode switches can stop it reliably.
     let slideshow_timer = Rc::new(slint::Timer::default());
     state.borrow_mut().slideshow_timer = Some(Rc::clone(&slideshow_timer));
-    wire_image_viewer(&app, &state, &model, &gallery_model, &gallery_tx, &slideshow_timer);
+    wire_image_viewer(
+        &app,
+        &state,
+        &model,
+        &gallery_model,
+        &gallery_tx,
+        &slideshow_timer,
+    );
 
     // Folder scanning runs on a background thread (recursive walk + magic-byte
     // checks shouldn't block the UI); batches come back over this channel and
@@ -837,85 +964,112 @@ fn main() {
         let sprite_timer = Rc::clone(&sprite_timer);
         let sprite_tx = sprite_tx.clone();
         let drain_timer = slint::Timer::default();
-        drain_timer.start(slint::TimerMode::Repeated, std::time::Duration::from_millis(100), move || {
-            let Some(app) = app_weak.upgrade() else { return };
-            while let Ok(result) = gallery_rx.try_recv() {
-                ui_bridge::apply_gallery_thumb(&state.borrow(), &gallery_model, result);
-            }
-            while let Ok(batch) = scan_rx.try_recv() {
-                let named = batch.into_iter().map(|p| (ui_bridge::basename(&p), p)).collect();
-                let played = ui_bridge::enqueue_paths(&mpv, &app, &mut state.borrow_mut(), &model, named);
-                if let Some(idx) = played {
-                    ui_bridge::schedule_sprite_generation(
-                        app_weak.clone(),
-                        &state,
+        drain_timer.start(
+            slint::TimerMode::Repeated,
+            std::time::Duration::from_millis(100),
+            move || {
+                let Some(app) = app_weak.upgrade() else {
+                    return;
+                };
+                while let Ok(result) = gallery_rx.try_recv() {
+                    ui_bridge::apply_gallery_thumb(&state.borrow(), &gallery_model, result);
+                }
+                while let Ok(batch) = scan_rx.try_recv() {
+                    let named = batch
+                        .into_iter()
+                        .map(|p| (ui_bridge::basename(&p), p))
+                        .collect();
+                    let played = ui_bridge::enqueue_paths(
+                        &mpv,
+                        &app,
+                        &mut state.borrow_mut(),
                         &model,
-                        &sprite_timer,
-                        sprite_tx.clone(),
-                        idx,
+                        named,
                     );
-                }
-            }
-            while let Ok((hash, ok)) = sprite_rx.try_recv() {
-                ui_bridge::apply_sprite_result(&app, &mut state.borrow_mut(), &model, hash, ok);
-            }
-            // Non-blocking poll (timeout 0.0): drain whatever's queued on the
-            // playback-property/error event client since the last tick.
-            loop {
-                match mpv_events.wait_event(0.0) {
-                    Some(Ok(libmpv2::events::Event::PropertyChange { name, change, .. })) => match (name, change) {
-                        ("time-pos", libmpv2::events::PropertyData::Double(v)) => {
-                            app.set_current_time(v as f32);
-                            app.set_current_time_text(ui_bridge::format_time(v).into());
-                        }
-                        ("duration", libmpv2::events::PropertyData::Double(v)) => {
-                            app.set_duration(v as f32);
-                            app.set_duration_text(ui_bridge::format_time(v).into());
-                        }
-                        ("pause", libmpv2::events::PropertyData::Flag(paused)) => {
-                            app.set_playing(!paused);
-                        }
-                        ("eof-reached", libmpv2::events::PropertyData::Flag(true)) => {
-                            // Queue-as-playlist: advance to whatever
-                            // `playable_next` says is next, same logic (and
-                            // shuffle/loop handling) as the manual Next
-                            // button — `loop_on` already wraps a multi-item
-                            // queue back to the start, or replays a
-                            // single-item queue, per `Queue::playable_next`.
-                            let advanced = {
-                                let mut state_ref = state.borrow_mut();
-                                if state_ref.mode == ui_bridge::Mode::Video {
-                                    state_ref
-                                        .queue
-                                        .playable_next(&state_ref.search_query, state_ref.shuffle_on, state_ref.loop_on)
-                                        .inspect(|&idx| {
-                                            ui_bridge::play_index(&mpv, &app, &mut state_ref, &model, idx);
-                                        })
-                                } else {
-                                    None
-                                }
-                            };
-                            if let Some(idx) = advanced {
-                                ui_bridge::schedule_sprite_generation(
-                                    app_weak.clone(),
-                                    &state,
-                                    &model,
-                                    &sprite_timer,
-                                    sprite_tx.clone(),
-                                    idx,
-                                );
-                            }
-                        }
-                        _ => {}
-                    },
-                    Some(Err(e)) => {
-                        app.set_error_message(e.to_string().into());
+                    if let Some(idx) = played {
+                        ui_bridge::schedule_sprite_generation(
+                            app_weak.clone(),
+                            &state,
+                            &model,
+                            &sprite_timer,
+                            sprite_tx.clone(),
+                            idx,
+                        );
                     }
-                    Some(Ok(_)) => {}
-                    None => break,
                 }
-            }
-        });
+                while let Ok((hash, ok)) = sprite_rx.try_recv() {
+                    ui_bridge::apply_sprite_result(&app, &mut state.borrow_mut(), &model, hash, ok);
+                }
+                // Non-blocking poll (timeout 0.0): drain whatever's queued on the
+                // playback-property/error event client since the last tick.
+                loop {
+                    match mpv_events.wait_event(0.0) {
+                        Some(Ok(libmpv2::events::Event::PropertyChange {
+                            name, change, ..
+                        })) => match (name, change) {
+                            ("time-pos", libmpv2::events::PropertyData::Double(v)) => {
+                                app.set_current_time(v as f32);
+                                app.set_current_time_text(ui_bridge::format_time(v).into());
+                            }
+                            ("duration", libmpv2::events::PropertyData::Double(v)) => {
+                                app.set_duration(v as f32);
+                                app.set_duration_text(ui_bridge::format_time(v).into());
+                            }
+                            ("pause", libmpv2::events::PropertyData::Flag(paused)) => {
+                                app.set_playing(!paused);
+                            }
+                            ("eof-reached", libmpv2::events::PropertyData::Flag(true)) => {
+                                // Queue-as-playlist: advance to whatever
+                                // `playable_next` says is next, same logic (and
+                                // shuffle/loop handling) as the manual Next
+                                // button — `loop_on` already wraps a multi-item
+                                // queue back to the start, or replays a
+                                // single-item queue, per `Queue::playable_next`.
+                                let advanced = {
+                                    let mut state_ref = state.borrow_mut();
+                                    if state_ref.mode == ui_bridge::Mode::Video {
+                                        state_ref
+                                            .queue
+                                            .playable_next(
+                                                &state_ref.search_query,
+                                                state_ref.shuffle_on,
+                                                state_ref.loop_on,
+                                            )
+                                            .inspect(|&idx| {
+                                                ui_bridge::play_index(
+                                                    &mpv,
+                                                    &app,
+                                                    &mut state_ref,
+                                                    &model,
+                                                    idx,
+                                                );
+                                            })
+                                    } else {
+                                        None
+                                    }
+                                };
+                                if let Some(idx) = advanced {
+                                    ui_bridge::schedule_sprite_generation(
+                                        app_weak.clone(),
+                                        &state,
+                                        &model,
+                                        &sprite_timer,
+                                        sprite_tx.clone(),
+                                        idx,
+                                    );
+                                }
+                            }
+                            _ => {}
+                        },
+                        Some(Err(e)) => {
+                            app.set_error_message(e.to_string().into());
+                        }
+                        Some(Ok(_)) => {}
+                        None => break,
+                    }
+                }
+            },
+        );
         // Leaked intentionally: this timer must outlive `main` for the
         // duration of the app, same lifetime as the window itself.
         std::mem::forget(drain_timer);

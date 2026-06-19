@@ -52,7 +52,10 @@ mod tests {
         let path_b = std::env::temp_dir().join("flick-hash-test-b.bin");
         std::fs::write(&path_a, vec![1u8; 1000]).unwrap();
         std::fs::write(&path_b, vec![2u8; 1000]).unwrap();
-        assert_ne!(hash_video_file(&path_a).unwrap(), hash_video_file(&path_b).unwrap());
+        assert_ne!(
+            hash_video_file(&path_a).unwrap(),
+            hash_video_file(&path_b).unwrap()
+        );
         std::fs::remove_file(&path_a).unwrap();
         std::fs::remove_file(&path_b).unwrap();
     }

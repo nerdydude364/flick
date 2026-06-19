@@ -3,7 +3,9 @@ use std::io::Read;
 use std::path::Path;
 
 fn read_magic_bytes(path: &Path, count: usize) -> Vec<u8> {
-    let Ok(mut file) = File::open(path) else { return Vec::new() };
+    let Ok(mut file) = File::open(path) else {
+        return Vec::new();
+    };
     let mut buf = vec![0u8; count];
     match file.read(&mut buf) {
         Ok(n) => {

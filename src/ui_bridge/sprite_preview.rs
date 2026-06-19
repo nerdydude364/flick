@@ -16,9 +16,10 @@ pub fn clear_sprite_preview(app: &AppWindow) {
 /// Pushes the cached sprite sheet for the currently playing video (if any)
 /// into the AppWindow properties that drive the progress-bar hover preview.
 pub fn sync_sprite_preview(app: &AppWindow, state: &mut AppState) {
-    let path = state.queue.now_playing().and_then(|index| {
-        state.queue.item(index).map(|item| item.path.clone())
-    });
+    let path = state
+        .queue
+        .now_playing()
+        .and_then(|index| state.queue.item(index).map(|item| item.path.clone()));
     let Some(path) = path else {
         clear_sprite_preview(app);
         return;
@@ -64,7 +65,13 @@ fn apply_sprite_meta_to_ui(app: &AppWindow, meta: &thumbnails::SpriteMeta, image
     app.set_sprite_thumb_h(meta.thumb_height as i32);
 }
 
-fn apply_list_preview_meta_to_ui(app: &AppWindow, meta: &thumbnails::SpriteMeta, image: slint::Image, col: u32, row: u32) {
+fn apply_list_preview_meta_to_ui(
+    app: &AppWindow,
+    meta: &thumbnails::SpriteMeta,
+    image: slint::Image,
+    col: u32,
+    row: u32,
+) {
     app.set_list_preview_image(image);
     app.set_list_preview_col(col as i32);
     app.set_list_preview_row(row as i32);
@@ -132,7 +139,9 @@ pub fn schedule_sprite_generation(
     sprite_tx: std::sync::mpsc::Sender<(String, bool)>,
     index: usize,
 ) {
-    let Some(path) = state.borrow().queue.item(index).map(|it| it.path.clone()) else { return };
+    let Some(path) = state.borrow().queue.item(index).map(|it| it.path.clone()) else {
+        return;
+    };
     // Folder scans can put images in this queue too (Phase 5 will give them
     // their own queue/mode) — sprites are a video-only concept, so skip them
     // rather than running mpv's video encode pipeline against a still image.
@@ -141,38 +150,48 @@ pub fn schedule_sprite_generation(
     }
     let state = Rc::clone(state);
     let model = Rc::clone(model);
-    sprite_timer.start(slint::TimerMode::SingleShot, std::time::Duration::from_millis(500), move || {
-        let Some(app) = app_weak.upgrade() else { return };
-        let mut state_ref = state.borrow_mut();
-        // Bail if the user has already switched to something else since this
-        // was scheduled — matches the original's `if (nowPlaying !== capturedIndex) return`.
-        if state_ref.queue.now_playing() != Some(index) {
-            return;
-        }
-        let status = state_ref.sprite_status_for(&path);
-        if status == SpriteStatus::Done {
-            sync_sprite_preview(&app, &mut state_ref);
-            return;
-        }
-        if status == SpriteStatus::InProgress {
+    sprite_timer.start(
+        slint::TimerMode::SingleShot,
+        std::time::Duration::from_millis(500),
+        move || {
+            let Some(app) = app_weak.upgrade() else {
+                return;
+            };
+            let mut state_ref = state.borrow_mut();
+            // Bail if the user has already switched to something else since this
+            // was scheduled — matches the original's `if (nowPlaying !== capturedIndex) return`.
+            if state_ref.queue.now_playing() != Some(index) {
+                return;
+            }
+            let status = state_ref.sprite_status_for(&path);
+            if status == SpriteStatus::Done {
+                sync_sprite_preview(&app, &mut state_ref);
+                return;
+            }
+            if status == SpriteStatus::InProgress {
+                app.set_sprite_ready(false);
+                app.set_sprite_loading(true);
+                return;
+            }
+            let Some(hash) = state_ref.sprite_hash_for(&path) else {
+                return;
+            };
+            state_ref
+                .sprite_status
+                .insert(hash.clone(), SpriteStatus::InProgress);
             app.set_sprite_ready(false);
             app.set_sprite_loading(true);
-            return;
-        }
-        let Some(hash) = state_ref.sprite_hash_for(&path) else { return };
-        state_ref.sprite_status.insert(hash.clone(), SpriteStatus::InProgress);
-        app.set_sprite_ready(false);
-        app.set_sprite_loading(true);
-        rebuild_playlist_model(&mut state_ref, &model);
-        drop(state_ref);
+            rebuild_playlist_model(&mut state_ref, &model);
+            drop(state_ref);
 
-        let tx = sprite_tx.clone();
-        let path = path.clone();
-        std::thread::spawn(move || {
-            let ok = thumbnails::generate_sprite(&path).is_ok();
-            let _ = tx.send((hash, ok));
-        });
-    });
+            let tx = sprite_tx.clone();
+            let path = path.clone();
+            std::thread::spawn(move || {
+                let ok = thumbnails::generate_sprite(&path).is_ok();
+                let _ = tx.send((hash, ok));
+            });
+        },
+    );
 }
 
 /// Applies a background sprite-generation result (from the channel
@@ -187,11 +206,19 @@ pub fn apply_sprite_result(
     hash: String,
     ok: bool,
 ) {
-    state.sprite_status.insert(hash.clone(), if ok { SpriteStatus::Done } else { SpriteStatus::NotStarted });
+    state.sprite_status.insert(
+        hash.clone(),
+        if ok {
+            SpriteStatus::Done
+        } else {
+            SpriteStatus::NotStarted
+        },
+    );
     if ok {
-        let path = state.queue.now_playing().and_then(|index| {
-            state.queue.item(index).map(|item| item.path.clone())
-        });
+        let path = state
+            .queue
+            .now_playing()
+            .and_then(|index| state.queue.item(index).map(|item| item.path.clone()));
         if let Some(path) = path
             && state.sprite_hash_for(&path).as_deref() == Some(hash.as_str())
         {

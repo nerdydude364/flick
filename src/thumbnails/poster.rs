@@ -26,7 +26,9 @@ pub fn ensure_poster_cached(path: &Path) -> Option<String> {
         let img = image::open(path).ok()?;
         // JPEG has no alpha channel — drop it (transparent source images
         // just get an implicit black background in the thumbnail).
-        let thumb = img.resize_to_fill(POSTER_SIZE, POSTER_SIZE, FilterType::Triangle).to_rgb8();
+        let thumb = img
+            .resize_to_fill(POSTER_SIZE, POSTER_SIZE, FilterType::Triangle)
+            .to_rgb8();
         let mut jpeg_bytes = Vec::new();
         image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg_bytes, 82)
             .encode_image(&thumb)

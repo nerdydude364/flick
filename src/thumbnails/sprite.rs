@@ -1,5 +1,5 @@
 use super::cache;
-use super::frame::{extract_frame, probe_duration, ExtractError};
+use super::frame::{ExtractError, extract_frame, probe_duration};
 use super::hash::hash_video_file;
 use image::{ImageBuffer, Rgba, RgbaImage};
 use serde::{Deserialize, Serialize};
@@ -71,17 +71,21 @@ pub fn generate_sprite(video_path: &Path) -> Result<(), SpriteError> {
     // threads that each drive their own headless mpv instance instead.
     for batch_start in (0..frame_count).step_by(CONCURRENCY) {
         let batch_end = (batch_start + CONCURRENCY as u32).min(frame_count);
-        let results: Vec<(u32, Result<super::frame::RawFrame, ExtractError>)> = std::thread::scope(|scope| {
-            let handles: Vec<_> = (batch_start..batch_end)
-                .map(|i| {
-                    scope.spawn(move || {
-                        let t = i as f64 * interval_sec;
-                        (i, extract_frame(video_path, t, THUMB_W, THUMB_H))
+        let results: Vec<(u32, Result<super::frame::RawFrame, ExtractError>)> =
+            std::thread::scope(|scope| {
+                let handles: Vec<_> = (batch_start..batch_end)
+                    .map(|i| {
+                        scope.spawn(move || {
+                            let t = i as f64 * interval_sec;
+                            (i, extract_frame(video_path, t, THUMB_W, THUMB_H))
+                        })
                     })
-                })
-                .collect();
-            handles.into_iter().map(|h| h.join().expect("extraction thread panicked")).collect()
-        });
+                    .collect();
+                handles
+                    .into_iter()
+                    .map(|h| h.join().expect("extraction thread panicked"))
+                    .collect()
+            });
 
         for (i, result) in results {
             let raw = result.map_err(SpriteError::Extract)?;
@@ -89,7 +93,12 @@ pub fn generate_sprite(video_path: &Path) -> Result<(), SpriteError> {
                 .expect("extract_frame buffer always matches its declared dimensions");
             let col = i % COLUMNS;
             let row = i / COLUMNS;
-            image::imageops::replace(&mut sheet, &tile, (col * THUMB_W) as i64, (row * THUMB_H) as i64);
+            image::imageops::replace(
+                &mut sheet,
+                &tile,
+                (col * THUMB_W) as i64,
+                (row * THUMB_H) as i64,
+            );
         }
     }
 
@@ -99,7 +108,14 @@ pub fn generate_sprite(video_path: &Path) -> Result<(), SpriteError> {
         .map_err(SpriteError::Image)?;
     cache::write_atomic(&sprite_path, &jpeg_bytes).map_err(SpriteError::Io)?;
 
-    let meta = SpriteMeta { interval_sec, frame_count, columns: COLUMNS, rows, thumb_width: THUMB_W, thumb_height: THUMB_H };
+    let meta = SpriteMeta {
+        interval_sec,
+        frame_count,
+        columns: COLUMNS,
+        rows,
+        thumb_width: THUMB_W,
+        thumb_height: THUMB_H,
+    };
     let meta_json = serde_json::to_string(&meta).map_err(|e| SpriteError::Json(e.to_string()))?;
     cache::write_atomic(&meta_path, meta_json.as_bytes()).map_err(SpriteError::Io)?;
 

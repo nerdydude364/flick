@@ -26,7 +26,10 @@ impl std::fmt::Display for ExtractError {
             Self::Timeout => write!(f, "timed out waiting for frame extraction"),
             Self::Io(e) => write!(f, "io error: {e}"),
             Self::UnexpectedSize { expected, got } => {
-                write!(f, "raw frame size mismatch: expected {expected} bytes, got {got}")
+                write!(
+                    f,
+                    "raw frame size mismatch: expected {expected} bytes, got {got}"
+                )
             }
         }
     }
@@ -49,7 +52,12 @@ pub struct RawFrame {
 /// external dependency at all — same trick mpv's own community thumbnailer
 /// scripts (thumbfast, mpv_thumbnail_script) use, just driven through libmpv
 /// directly instead of spawning the `mpv` CLI binary.
-pub fn extract_frame(input: &Path, timestamp_secs: f64, width: u32, height: u32) -> Result<RawFrame, ExtractError> {
+pub fn extract_frame(
+    input: &Path,
+    timestamp_secs: f64,
+    width: u32,
+    height: u32,
+) -> Result<RawFrame, ExtractError> {
     let out_path = std::env::temp_dir().join(format!(
         "flick-frame-{}-{}.raw",
         std::process::id(),
@@ -81,7 +89,9 @@ pub fn extract_frame(input: &Path, timestamp_secs: f64, width: u32, height: u32)
         .map_err(|e| ExtractError::Mpv(e.to_string()))?
     };
 
-    let client = mpv.create_client(None).map_err(|e| ExtractError::Mpv(e.to_string()))?;
+    let client = mpv
+        .create_client(None)
+        .map_err(|e| ExtractError::Mpv(e.to_string()))?;
     let _ = client.disable_deprecated_events();
 
     mpv.command("loadfile", &[&input.to_string_lossy(), "replace"])
@@ -114,10 +124,17 @@ pub fn extract_frame(input: &Path, timestamp_secs: f64, width: u32, height: u32)
 
     let expected = (width as usize) * (height as usize) * 4;
     if bytes.len() != expected {
-        return Err(ExtractError::UnexpectedSize { expected, got: bytes.len() });
+        return Err(ExtractError::UnexpectedSize {
+            expected,
+            got: bytes.len(),
+        });
     }
 
-    Ok(RawFrame { width, height, rgba: bytes })
+    Ok(RawFrame {
+        width,
+        height,
+        rgba: bytes,
+    })
 }
 
 /// Probes a video's duration in seconds without ffprobe, via mpv's own
@@ -134,7 +151,9 @@ pub fn probe_duration(input: &Path) -> Result<f64, ExtractError> {
         .map_err(|e| ExtractError::Mpv(e.to_string()))?
     };
 
-    let client = mpv.create_client(None).map_err(|e| ExtractError::Mpv(e.to_string()))?;
+    let client = mpv
+        .create_client(None)
+        .map_err(|e| ExtractError::Mpv(e.to_string()))?;
     let _ = client.disable_deprecated_events();
 
     mpv.command("loadfile", &[&input.to_string_lossy(), "replace"])
@@ -153,7 +172,8 @@ pub fn probe_duration(input: &Path) -> Result<f64, ExtractError> {
         }
     }
 
-    mpv.get_property::<f64>("duration").map_err(|e| ExtractError::Mpv(e.to_string()))
+    mpv.get_property::<f64>("duration")
+        .map_err(|e| ExtractError::Mpv(e.to_string()))
 }
 
 #[cfg(test)]
@@ -181,7 +201,8 @@ mod tests {
 
         let img = image::RgbaImage::from_raw(frame.width, frame.height, frame.rgba)
             .expect("buffer size matches dimensions");
-        img.save("/tmp/flick-frame-spike.png").expect("failed to save spike PNG");
+        img.save("/tmp/flick-frame-spike.png")
+            .expect("failed to save spike PNG");
         eprintln!("wrote /tmp/flick-frame-spike.png");
     }
 }

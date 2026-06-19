@@ -63,7 +63,10 @@ impl Queue {
     /// them (auto-switch mode, autoplay if nothing was playing, re-shuffle if
     /// shuffle is already on — all orchestration in `enqueue()` in app.js that
     /// spans both queues / the player).
-    pub fn enqueue(&mut self, candidates: impl IntoIterator<Item = (String, PathBuf)>) -> Vec<usize> {
+    pub fn enqueue(
+        &mut self,
+        candidates: impl IntoIterator<Item = (String, PathBuf)>,
+    ) -> Vec<usize> {
         let mut added = Vec::new();
         for (name, path) in candidates {
             if self.paths.insert(path.clone()) {
@@ -71,7 +74,13 @@ impl Queue {
                 added.push(self.items.len());
                 let name_lower = name.to_lowercase();
                 let size_bytes = std::fs::metadata(&path).map(|m| m.len()).ok();
-                self.items.push(MediaItem { id: self.next_id, name, path, name_lower, size_bytes });
+                self.items.push(MediaItem {
+                    id: self.next_id,
+                    name,
+                    path,
+                    name_lower,
+                    size_bytes,
+                });
             }
         }
         added
@@ -170,8 +179,12 @@ impl Queue {
         let filtered = self.filtered_indices(search_query);
         if shuffle_on && self.play_order.len() >= 2 {
             let filtered_set: HashSet<usize> = filtered.iter().copied().collect();
-            let result: Vec<usize> =
-                self.play_order.iter().copied().filter(|i| filtered_set.contains(i)).collect();
+            let result: Vec<usize> = self
+                .play_order
+                .iter()
+                .copied()
+                .filter(|i| filtered_set.contains(i))
+                .collect();
             if !result.is_empty() {
                 return result;
             }
@@ -186,15 +199,31 @@ impl Queue {
     }
 
     /// Port of `indexOfInOrder`.
-    pub fn index_of_in_order(&self, index: usize, search_query: &str, shuffle_on: bool) -> Option<usize> {
-        self.current_order(search_query, shuffle_on).iter().position(|&i| i == index)
+    pub fn index_of_in_order(
+        &self,
+        index: usize,
+        search_query: &str,
+        shuffle_on: bool,
+    ) -> Option<usize> {
+        self.current_order(search_query, shuffle_on)
+            .iter()
+            .position(|&i| i == index)
     }
 
     /// Port of `playableNext`.
-    pub fn playable_next(&self, search_query: &str, shuffle_on: bool, loop_on: bool) -> Option<usize> {
+    pub fn playable_next(
+        &self,
+        search_query: &str,
+        shuffle_on: bool,
+        loop_on: bool,
+    ) -> Option<usize> {
         let order = self.current_order(search_query, shuffle_on);
         if order.len() < 2 {
-            return if loop_on && order.len() == 1 { Some(order[0]) } else { None };
+            return if loop_on && order.len() == 1 {
+                Some(order[0])
+            } else {
+                None
+            };
         }
         // -1 when nothing is playing, matching `order.indexOf(-1) === -1` in JS.
         let pos: i64 = self
@@ -213,7 +242,12 @@ impl Queue {
     }
 
     /// Port of `playablePrev`.
-    pub fn playable_prev(&self, search_query: &str, shuffle_on: bool, loop_on: bool) -> Option<usize> {
+    pub fn playable_prev(
+        &self,
+        search_query: &str,
+        shuffle_on: bool,
+        loop_on: bool,
+    ) -> Option<usize> {
         let order = self.current_order(search_query, shuffle_on);
         if order.len() < 2 {
             return None;

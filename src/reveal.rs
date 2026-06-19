@@ -8,7 +8,10 @@ use std::path::Path;
 pub fn reveal_in_file_manager(path: &Path) {
     #[cfg(target_os = "macos")]
     {
-        let _ = std::process::Command::new("open").arg("-R").arg(path).spawn();
+        let _ = std::process::Command::new("open")
+            .arg("-R")
+            .arg(path)
+            .spawn();
     }
     #[cfg(target_os = "linux")]
     {

@@ -47,13 +47,22 @@ pub fn toggle_gallery(
 /// so 1000+ multi-megapixel originals never block the UI thread or get held
 /// in memory at full resolution all at once — see `ensure_poster_cached`'s
 /// doc comment for the same reasoning applied per-image.
-fn open_gallery(state: &mut AppState, gallery_model: &VecModel<slint::Image>, gallery_tx: &Sender<GalleryThumbResult>) {
+fn open_gallery(
+    state: &mut AppState,
+    gallery_model: &VecModel<slint::Image>,
+    gallery_tx: &Sender<GalleryThumbResult>,
+) {
     state.gallery_generation += 1;
     let generation = state.gallery_generation;
 
-    let order = state.image_queue.current_order(&state.search_query, state.shuffle_on);
-    let paths: Vec<PathBuf> =
-        order.iter().filter_map(|&i| state.image_queue.item(i)).map(|item| item.path.clone()).collect();
+    let order = state
+        .image_queue
+        .current_order(&state.search_query, state.shuffle_on);
+    let paths: Vec<PathBuf> = order
+        .iter()
+        .filter_map(|&i| state.image_queue.item(i))
+        .map(|item| item.path.clone())
+        .collect();
     state.gallery_order = order;
 
     gallery_model.set_vec(vec![slint::Image::default(); paths.len()]);
@@ -82,7 +91,11 @@ fn open_gallery(state: &mut AppState, gallery_model: &VecModel<slint::Image>, ga
 /// thread — drops it if the grid has since moved on to a newer generation
 /// (closed/reopened, search/shuffle changed) rather than writing into what's
 /// now the wrong row.
-pub fn apply_gallery_thumb(state: &AppState, gallery_model: &VecModel<slint::Image>, result: GalleryThumbResult) {
+pub fn apply_gallery_thumb(
+    state: &AppState,
+    gallery_model: &VecModel<slint::Image>,
+    result: GalleryThumbResult,
+) {
     let (generation, pos, hash) = result;
     if generation != state.gallery_generation || pos >= gallery_model.row_count() {
         return;

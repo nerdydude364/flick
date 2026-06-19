@@ -6,13 +6,16 @@ mod sprite_preview;
 mod state;
 
 pub use ab_loop::{handle_progress_click, toggle_ab_loop};
-pub use gallery::{apply_gallery_thumb, toggle_gallery, GalleryThumbResult};
+pub use gallery::{GalleryThumbResult, apply_gallery_thumb, toggle_gallery};
 pub use gif::tick_gif_animation;
 pub use playback::{
-    enqueue_paths, navigate_image_relative, play_index, remove_item, reorder_item, set_mode, set_slideshow_duration,
-    show_image_at, sync_image_viewer_ui, toggle_slideshow,
+    enqueue_paths, navigate_image_relative, play_index, remove_item, reorder_item, set_mode,
+    set_slideshow_duration, show_image_at, sync_image_viewer_ui, toggle_slideshow,
 };
-pub use sprite_preview::{apply_sprite_result, hide_list_sprite_preview, schedule_sprite_generation, show_list_sprite_preview};
+pub use sprite_preview::{
+    apply_sprite_result, hide_list_sprite_preview, schedule_sprite_generation,
+    show_list_sprite_preview,
+};
 pub use state::{AppState, Mode, SpriteStatus};
 
 use crate::PlaylistItemData;
@@ -38,7 +41,9 @@ pub(crate) fn log_mpv_err<T>(label: &str, result: Result<T, libmpv2::Error>) -> 
 /// `toFileEntry(fp)` called with no `rootDir` in main.js. Folder scans use a
 /// root-relative path instead — see `enqueue_paths`.
 pub fn basename(path: &Path) -> String {
-    path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| path.to_string_lossy().into_owned())
+    path.file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.to_string_lossy().into_owned())
 }
 
 fn sprite_status_glyph(status: SpriteStatus) -> &'static str {
@@ -55,16 +60,31 @@ fn sprite_status_glyph(status: SpriteStatus) -> &'static str {
 pub fn rebuild_playlist_model(state: &mut AppState, model: &VecModel<PlaylistItemData>) {
     let is_video = state.mode == Mode::Video;
     let (filtered, now_playing) = if is_video {
-        (state.queue.filtered_indices(&state.search_query), state.queue.now_playing())
+        (
+            state.queue.filtered_indices(&state.search_query),
+            state.queue.now_playing(),
+        )
     } else {
-        (state.image_queue.filtered_indices(&state.search_query), state.image_queue.now_playing())
+        (
+            state.image_queue.filtered_indices(&state.search_query),
+            state.image_queue.now_playing(),
+        )
     };
     let rows: Vec<PlaylistItemData> = filtered
         .into_iter()
         .map(|i| {
-            let item =
-                if is_video { state.queue.item(i) } else { state.image_queue.item(i) }.expect("valid index").clone();
-            let glyph = if is_video { sprite_status_glyph(state.sprite_status_for(&item.path)) } else { "" };
+            let item = if is_video {
+                state.queue.item(i)
+            } else {
+                state.image_queue.item(i)
+            }
+            .expect("valid index")
+            .clone();
+            let glyph = if is_video {
+                sprite_status_glyph(state.sprite_status_for(&item.path))
+            } else {
+                ""
+            };
             let size_text = item.size_bytes.map(format_file_size).unwrap_or_default();
             PlaylistItemData {
                 queue_index: i as i32,

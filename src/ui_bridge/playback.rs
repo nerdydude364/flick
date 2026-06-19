@@ -11,7 +11,13 @@ use std::path::PathBuf;
 /// Loads `index` from the queue: updates state, issues the mpv loadfile
 /// command, and syncs the UI. Port of the playback-triggering half of
 /// `playAt` in app.js (sprite generation is Phase 3, not ported here).
-pub fn play_index(mpv: &Mpv, app: &AppWindow, state: &mut AppState, model: &VecModel<PlaylistItemData>, index: usize) {
+pub fn play_index(
+    mpv: &Mpv,
+    app: &AppWindow,
+    state: &mut AppState,
+    model: &VecModel<PlaylistItemData>,
+    index: usize,
+) {
     // Hard guard: never start/touch video playback while in image mode.
     // Without this, e.g. loading a mixed video+image folder while browsing
     // images silently started a video playing in the background (caught via
@@ -25,7 +31,10 @@ pub fn play_index(mpv: &Mpv, app: &AppWindow, state: &mut AppState, model: &VecM
     }
     state.queue.set_now_playing(Some(index));
     let path = state.queue.item(index).unwrap().path.clone();
-    log_mpv_err("loadfile", mpv.command("loadfile", &[&path.to_string_lossy(), "replace"]));
+    log_mpv_err(
+        "loadfile",
+        mpv.command("loadfile", &[&path.to_string_lossy(), "replace"]),
+    );
     // loadfile alone doesn't force a resume — if mpv was paused (e.g. parked at
     // EOF via keep-open=yes), it stays paused on the new file too, desyncing
     // the UI from actual playback state. Force it, matching the original's
@@ -38,7 +47,12 @@ pub fn play_index(mpv: &Mpv, app: &AppWindow, state: &mut AppState, model: &VecM
 
 /// Shows `index` from the image queue in the gallery view — image-mode
 /// equivalent of `play_index`, port of `showImageAt`.
-pub fn show_image_at(app: &AppWindow, state: &mut AppState, model: &VecModel<PlaylistItemData>, index: usize) {
+pub fn show_image_at(
+    app: &AppWindow,
+    state: &mut AppState,
+    model: &VecModel<PlaylistItemData>,
+    index: usize,
+) {
     if state.image_queue.item(index).is_none() {
         return;
     }
@@ -61,9 +75,13 @@ pub fn navigate_image_relative(
     delta: i32,
 ) -> bool {
     let next = if delta < 0 {
-        state.image_queue.playable_prev(&state.search_query, state.shuffle_on, state.loop_on)
+        state
+            .image_queue
+            .playable_prev(&state.search_query, state.shuffle_on, state.loop_on)
     } else {
-        state.image_queue.playable_next(&state.search_query, state.shuffle_on, state.loop_on)
+        state
+            .image_queue
+            .playable_next(&state.search_query, state.shuffle_on, state.loop_on)
     };
     if let Some(idx) = next {
         show_image_at(app, state, model, idx);
@@ -84,7 +102,10 @@ pub fn toggle_slideshow(app: &AppWindow, state: &mut AppState, model: &VecModel<
     }
     state.slideshow_on = !state.slideshow_on;
     app.set_slideshow_on(state.slideshow_on);
-    if state.slideshow_on && state.image_queue.now_playing().is_none() && !state.image_queue.is_empty() {
+    if state.slideshow_on
+        && state.image_queue.now_playing().is_none()
+        && !state.image_queue.is_empty()
+    {
         show_image_at(app, state, model, 0);
     }
 }
@@ -98,7 +119,9 @@ pub fn set_slideshow_duration(app: &AppWindow, state: &mut AppState, seconds: f6
 /// properties: which image to show, its name, and the "N / total" counter.
 /// Decodes and starts an animation if the image is a GIF.
 pub fn sync_image_viewer_ui(app: &AppWindow, state: &mut AppState) {
-    let order = state.image_queue.current_order(&state.search_query, state.shuffle_on);
+    let order = state
+        .image_queue
+        .current_order(&state.search_query, state.shuffle_on);
     let now_playing = state.image_queue.now_playing();
     app.set_gallery_open(state.gallery_open);
     app.set_has_images(!state.image_queue.is_empty());
@@ -111,14 +134,19 @@ pub fn sync_image_viewer_ui(app: &AppWindow, state: &mut AppState) {
         reset_image_view_transform(app);
         return;
     };
-    let Some(item) = state.image_queue.item(index) else { return };
+    let Some(item) = state.image_queue.item(index) else {
+        return;
+    };
     if let Some(pos) = order.iter().position(|&i| i == index) {
         app.set_image_counter_text(format!("{} / {}", pos + 1, order.len()).into());
         app.set_image_position((pos + 1) as i32);
         app.set_image_total(order.len() as i32);
     }
 
-    let is_gif = item.path.extension().is_some_and(|e| e.eq_ignore_ascii_case("gif"));
+    let is_gif = item
+        .path
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("gif"));
     if is_gif {
         match decode_gif(&item.path) {
             Ok(anim) => {
@@ -193,7 +221,9 @@ fn enqueue_image_paths(
             show_image_at(app, state, model, 0);
         }
     } else if state.shuffle_on && had_items_before {
-        state.image_queue.reshuffle_keep_current_first(&state.search_query);
+        state
+            .image_queue
+            .reshuffle_keep_current_first(&state.search_query);
         sync_image_viewer_ui(app, state);
         rebuild_playlist_model(state, model);
     } else {
@@ -214,8 +244,9 @@ pub fn enqueue_paths(
     model: &VecModel<PlaylistItemData>,
     named_paths: Vec<(String, PathBuf)>,
 ) -> Option<usize> {
-    let (videos, images): (Vec<_>, Vec<_>) =
-        named_paths.into_iter().partition(|(_, p)| crate::library::is_video_file(p));
+    let (videos, images): (Vec<_>, Vec<_>) = named_paths
+        .into_iter()
+        .partition(|(_, p)| crate::library::is_video_file(p));
 
     if !images.is_empty() && videos.is_empty() {
         set_mode(mpv, app, state, model, Mode::Image);
@@ -223,7 +254,11 @@ pub fn enqueue_paths(
         set_mode(mpv, app, state, model, Mode::Video);
     }
 
-    let played_index = if !videos.is_empty() { enqueue_video_paths(mpv, app, state, model, videos) } else { None };
+    let played_index = if !videos.is_empty() {
+        enqueue_video_paths(mpv, app, state, model, videos)
+    } else {
+        None
+    };
     if !images.is_empty() {
         enqueue_image_paths(app, state, model, images);
     }
@@ -236,7 +271,13 @@ pub fn enqueue_paths(
 /// audio in the background (confirmed via manual testing this was confusing,
 /// not present in the original since the original never explicitly asked for
 /// it either way, so this is a deliberate native-app improvement).
-pub fn set_mode(mpv: &Mpv, app: &AppWindow, state: &mut AppState, model: &VecModel<PlaylistItemData>, mode: Mode) {
+pub fn set_mode(
+    mpv: &Mpv,
+    app: &AppWindow,
+    state: &mut AppState,
+    model: &VecModel<PlaylistItemData>,
+    mode: Mode,
+) {
     if state.mode == mode {
         return;
     }
@@ -269,7 +310,13 @@ pub fn set_mode(mpv: &Mpv, app: &AppWindow, state: &mut AppState, model: &VecMod
 /// Removes `index` from whichever queue is active — port of the
 /// orchestration half of `removeVideoAt`/`removeImageAt` (the
 /// data-structure half, shared by both, is `Queue::remove_at`).
-pub fn remove_item(mpv: &Mpv, app: &AppWindow, state: &mut AppState, model: &VecModel<PlaylistItemData>, index: usize) {
+pub fn remove_item(
+    mpv: &Mpv,
+    app: &AppWindow,
+    state: &mut AppState,
+    model: &VecModel<PlaylistItemData>,
+    index: usize,
+) {
     if state.mode == Mode::Video {
         match state.queue.remove_at(index) {
             RemoveOutcome::QueueEmpty => {
@@ -277,7 +324,9 @@ pub fn remove_item(mpv: &Mpv, app: &AppWindow, state: &mut AppState, model: &Vec
                 app.set_playing(false);
                 rebuild_playlist_model(state, model);
             }
-            RemoveOutcome::NowPlayingChanged(new_index) => play_index(mpv, app, state, model, new_index),
+            RemoveOutcome::NowPlayingChanged(new_index) => {
+                play_index(mpv, app, state, model, new_index)
+            }
             RemoveOutcome::NoPlaybackChange => rebuild_playlist_model(state, model),
         }
     } else {
@@ -287,7 +336,9 @@ pub fn remove_item(mpv: &Mpv, app: &AppWindow, state: &mut AppState, model: &Vec
                 sync_image_viewer_ui(app, state);
                 rebuild_playlist_model(state, model);
             }
-            RemoveOutcome::NowPlayingChanged(new_index) => show_image_at(app, state, model, new_index),
+            RemoveOutcome::NowPlayingChanged(new_index) => {
+                show_image_at(app, state, model, new_index)
+            }
             RemoveOutcome::NoPlaybackChange => {
                 sync_image_viewer_ui(app, state);
                 rebuild_playlist_model(state, model);
@@ -300,7 +351,12 @@ pub fn remove_item(mpv: &Mpv, app: &AppWindow, state: &mut AppState, model: &Vec
 /// *visual* row index the item was dropped on (not yet adjusted for
 /// removal) — port of the drop handler's `effectiveDst = dst > src ? dst -
 /// 1 : dst` adjustment, which `Queue::move_item` itself expects already applied.
-pub fn reorder_item(state: &mut AppState, model: &VecModel<PlaylistItemData>, src: usize, dst: usize) {
+pub fn reorder_item(
+    state: &mut AppState,
+    model: &VecModel<PlaylistItemData>,
+    src: usize,
+    dst: usize,
+) {
     if src == dst {
         return;
     }
