@@ -19,7 +19,11 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Install system deps
-        run: sudo apt-get update && sudo apt-get install -y libfontconfig1-dev
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            curl git build-essential pkg-config perl ca-certificates \
+            libssl-dev libfontconfig1-dev mpv libmpv-dev libfuse2 file
 
       - name: Build
         run: cargo build --verbose
