@@ -98,13 +98,20 @@ jobs:
         run: ./scripts/package-linux.sh
 
       - name: Download and Extract libmpv
-        if: matrix.platform == 'windows'
         shell: pwsh
         run: |
-          Invoke-WebRequest -Uri "https://github.com" -OutFile "mpv-dev.7z"
-          # Ensure 7zip is installed on the runner and extract the dll
+          # 1. Fetch latest release data from GitHub API
+          $ReleaseInfo = Invoke-RestMethod -Uri "https://github.com"
+          
+          # 2. Extract the browser download URL for the dev-x86_64 build package
+          $DownloadUrl = $ReleaseInfo.assets | Where-Object { $_.name -like "mpv-dev-x86_64-2*.7z" } | Select-Object -ExpandProperty browser_download_url
+          Write-Host "Found URL: $DownloadUrl"
+
+          # 3. Download the actual valid archive file
+          Invoke-WebRequest -Uri $DownloadUrl -OutFile "mpv-dev.7z"
+          
+          # 4. Extract and copy files safely
           7z x mpv-dev.7z -o"mpv-extracted"
-          # Copy the DLL to a central location
           New-Item -ItemType Directory -Force -Path "C:\mpv"
           Copy-Item -Path "mpv-extracted\libmpv-2.dll" -Destination "C:\mpv\libmpv-2.dll"
           Copy-Item -Path "mpv-extracted\mpv.lib" -Destination "C:\mpv\mpv.lib"
