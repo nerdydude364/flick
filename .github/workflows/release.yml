@@ -127,20 +127,13 @@ jobs:
         if: matrix.platform == 'windows'
         shell: pwsh
         run: |
-          # 1. Fetch latest release data from GitHub API
-          $ReleaseInfo = Invoke-RestMethod -Uri "https://api.github.com/repos/mpv-dev/mpv/releases/latest"
-          
-          # 2. Extract the browser download URL for the dev-x86_64 build package
-          $DownloadUrl = $ReleaseInfo.assets | Where-Object { $_.name -like "mpv-dev-x86_64-2*.7z" } | Select-Object -ExpandProperty browser_download_url
-          if ([string]::IsNullOrEmpty($DownloadUrl)) {
-            throw "Failed to extract download URL from GitHub API response"
-          }
-          Write-Host "Found URL: $DownloadUrl"
+          # Hardcoded mpv master nightly URL — avoids GitHub API rate-limit 404s
+          # and removes the dependency on querying + filtering the API response.
+          $Url = "https://github.com/mpv-dev/mpv-binaries/releases/download/latest/mpv-dev-x86_64-release.7z"
+          Write-Host "Downloading libmpv from: $Url"
+          Invoke-WebRequest -Uri $Url -OutFile "mpv-dev.7z"
 
-          # 3. Download the actual valid archive file
-          Invoke-WebRequest -Uri $DownloadUrl -OutFile "mpv-dev.7z"
-          
-          # 4. Extract and copy files safely
+          # Extract and copy files
           7z x mpv-dev.7z -o"mpv-extracted"
           New-Item -ItemType Directory -Force -Path "C:\mpv"
           Copy-Item -Path "mpv-extracted\libmpv-2.dll" -Destination "C:\mpv\libmpv-2.dll"
