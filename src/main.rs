@@ -1,6 +1,7 @@
 slint::include_modules!();
 
 mod dialogs;
+mod import;
 mod library;
 mod playlist;
 mod reveal;
@@ -159,6 +160,8 @@ fn wire_video_underlay(
     model: &Rc<VecModel<PlaylistItemData>>,
     sprite_timer: &Rc<slint::Timer>,
     sprite_tx: &std::sync::mpsc::Sender<(String, bool)>,
+    scan_tx: &std::sync::mpsc::Sender<Vec<library::ScannedFile>>,
+    startup_paths: Rc<RefCell<Vec<PathBuf>>>,
 ) {
     let mut underlay: Option<MpvUnderlay> = None;
     let app_weak = app.as_weak();
@@ -168,6 +171,7 @@ fn wire_video_underlay(
     let model = Rc::clone(model);
     let sprite_timer = Rc::clone(sprite_timer);
     let sprite_tx = sprite_tx.clone();
+    let scan_tx = scan_tx.clone();
     app.window()
         .set_rendering_notifier(move |rendering_state, graphics_api| match rendering_state {
             slint::RenderingState::RenderingSetup => {
@@ -187,19 +191,18 @@ fn wire_video_underlay(
                 // and falls back to audio-only with no retry. This was the
                 // actual cause of an earlier "black video, audio plays fine" bug.
                 if let Some(app) = app_weak.upgrade() {
-                    let should_play = {
-                        let state = state.borrow();
-                        state.queue.now_playing().is_none() && !state.queue.is_empty()
-                    };
-                    if should_play {
-                        ui_bridge::play_index(&mpv, &app, &mut state.borrow_mut(), &model, 0);
-                        ui_bridge::schedule_sprite_generation(
-                            app_weak.clone(),
+                    let paths = std::mem::take(&mut *startup_paths.borrow_mut());
+                    if !paths.is_empty() {
+                        import::import_paths(
+                            paths,
+                            &app,
+                            &mpv,
                             &state,
                             &model,
+                            &app_weak,
                             &sprite_timer,
-                            sprite_tx.clone(),
-                            0,
+                            &sprite_tx,
+                            &scan_tx,
                         );
                     }
                 }
@@ -398,6 +401,7 @@ fn wire_queue_management(
     model: &Rc<VecModel<PlaylistItemData>>,
     sprite_timer: &Rc<slint::Timer>,
     sprite_tx: &std::sync::mpsc::Sender<(String, bool)>,
+    scan_tx: &std::sync::mpsc::Sender<Vec<library::ScannedFile>>,
 ) {
     {
         let state = Rc::clone(state);
@@ -448,71 +452,31 @@ fn wire_queue_management(
         let app_weak = app.as_weak();
         let sprite_timer = Rc::clone(sprite_timer);
         let sprite_tx = sprite_tx.clone();
-        app.on_open_videos(move || {
+        let scan_tx = scan_tx.clone();
+        let open_media: Rc<dyn Fn()> = Rc::new(move || {
             let Some(app) = app_weak.upgrade() else {
                 return;
             };
             let Some(picked) = dialogs::open_media_files() else {
                 return;
             };
-            let valid = library::filter_valid_media(picked);
-            let named = valid
-                .into_iter()
-                .map(|p| {
-                    let size = std::fs::metadata(&p).ok().map(|m| m.len());
-                    (ui_bridge::basename(&p), p, size)
-                })
-                .collect();
-            let played =
-                ui_bridge::enqueue_paths(&mpv, &app, &mut state.borrow_mut(), &model, named);
-            if let Some(idx) = played {
-                ui_bridge::schedule_sprite_generation(
-                    app_weak.clone(),
-                    &state,
-                    &model,
-                    &sprite_timer,
-                    sprite_tx.clone(),
-                    idx,
-                );
-            }
+            import::import_paths(
+                picked,
+                &app,
+                &mpv,
+                &state,
+                &model,
+                &app_weak,
+                &sprite_timer,
+                &sprite_tx,
+                &scan_tx,
+            );
         });
-    }
-
-    {
-        let mpv = Rc::clone(mpv);
-        let state = Rc::clone(state);
-        let model = Rc::clone(model);
-        let app_weak = app.as_weak();
-        let sprite_timer = Rc::clone(sprite_timer);
-        let sprite_tx = sprite_tx.clone();
-        app.on_open_images(move || {
-            let Some(app) = app_weak.upgrade() else {
-                return;
-            };
-            let Some(picked) = dialogs::open_media_files() else {
-                return;
-            };
-            let valid = library::filter_valid_media(picked);
-            let named = valid
-                .into_iter()
-                .map(|p| {
-                    let size = std::fs::metadata(&p).ok().map(|m| m.len());
-                    (ui_bridge::basename(&p), p, size)
-                })
-                .collect();
-            let played =
-                ui_bridge::enqueue_paths(&mpv, &app, &mut state.borrow_mut(), &model, named);
-            if let Some(idx) = played {
-                ui_bridge::schedule_sprite_generation(
-                    app_weak.clone(),
-                    &state,
-                    &model,
-                    &sprite_timer,
-                    sprite_tx.clone(),
-                    idx,
-                );
-            }
+        app.on_open_videos({
+            let open_media = Rc::clone(&open_media);
+            move || open_media()
         });
+        app.on_open_images(move || open_media());
     }
 
     {
@@ -698,6 +662,20 @@ fn wire_folder_scan(app: &AppWindow, scan_tx: std::sync::mpsc::Sender<Vec<librar
                 let _ = tx.send(batch);
             });
         });
+    });
+}
+
+/// Accepts OS file/folder drops onto the window via winit and forwards each
+/// path to `drop_tx` for batched import on the UI thread.
+fn wire_file_drop(app: &AppWindow, drop_tx: std::sync::mpsc::Sender<PathBuf>) {
+    use slint::winit_030::{EventResult, WinitWindowAccessor, winit};
+    app.window().on_winit_window_event(move |_, event| {
+        if let winit::event::WindowEvent::DroppedFile(path) = event {
+            let _ = drop_tx.send(path.clone());
+            EventResult::PreventDefault
+        } else {
+            EventResult::Propagate
+        }
     });
 }
 
@@ -930,19 +908,38 @@ fn main() {
     // `ui_bridge::gallery`'s doc comments. Drained by the same timer below.
     let (gallery_tx, gallery_rx) = std::sync::mpsc::channel::<ui_bridge::GalleryThumbResult>();
 
-    // An optional CLI arg seeds the queue at startup, but actually loading it
-    // must wait until the render context exists (inside RenderingSetup below)
-    // — see the comment there for why.
-    if let Some(path) = std::env::args().nth(1) {
-        let path = PathBuf::from(path);
-        let name = ui_bridge::basename(&path);
-        let size = std::fs::metadata(&path).ok().map(|m| m.len());
-        state.borrow_mut().queue.enqueue([(name, path, size)]);
-    }
+    // Paths from CLI args ("Open with Flick", shell association) are imported
+    // once the mpv render context exists — see `wire_video_underlay`.
+    let startup_paths = Rc::new(RefCell::new(
+        std::env::args()
+            .skip(1)
+            .map(PathBuf::from)
+            .collect::<Vec<_>>(),
+    ));
 
-    wire_video_underlay(&app, &mpv, &state, &model, &sprite_timer, &sprite_tx);
+    let (scan_tx, scan_rx) = std::sync::mpsc::channel::<Vec<library::ScannedFile>>();
+    let (drop_tx, drop_rx) = std::sync::mpsc::channel::<PathBuf>();
+
+    wire_video_underlay(
+        &app,
+        &mpv,
+        &state,
+        &model,
+        &sprite_timer,
+        &sprite_tx,
+        &scan_tx,
+        Rc::clone(&startup_paths),
+    );
     wire_playback_controls(&app, &mpv, &state);
-    wire_queue_management(&app, &mpv, &state, &model, &sprite_timer, &sprite_tx);
+    wire_queue_management(
+        &app,
+        &mpv,
+        &state,
+        &model,
+        &sprite_timer,
+        &sprite_tx,
+        &scan_tx,
+    );
     // Centralize the slideshow timer so mode switches can stop it reliably.
     let slideshow_timer = Rc::new(slint::Timer::default());
     state.borrow_mut().slideshow_timer = Some(Rc::clone(&slideshow_timer));
@@ -961,8 +958,8 @@ fn main() {
     // over this channel and get drained on the UI thread by the timer below.
     // `Rc`-based state can't cross threads, so the channel only carries
     // plain `PathBuf`s plus that already-computed metadata.
-    let (scan_tx, scan_rx) = std::sync::mpsc::channel::<Vec<library::ScannedFile>>();
-    wire_folder_scan(&app, scan_tx);
+    wire_folder_scan(&app, scan_tx.clone());
+    wire_file_drop(&app, drop_tx);
 
     {
         let mpv = Rc::clone(&mpv);
@@ -972,6 +969,7 @@ fn main() {
         let app_weak = app.as_weak();
         let sprite_timer = Rc::clone(&sprite_timer);
         let sprite_tx = sprite_tx.clone();
+        let scan_tx = scan_tx.clone();
         let drain_timer = slint::Timer::default();
         drain_timer.start(
             slint::TimerMode::Repeated,
@@ -982,6 +980,23 @@ fn main() {
                 };
                 while let Ok(result) = gallery_rx.try_recv() {
                     ui_bridge::apply_gallery_thumb(&state.borrow(), &gallery_model, result);
+                }
+                let mut dropped = Vec::new();
+                while let Ok(path) = drop_rx.try_recv() {
+                    dropped.push(path);
+                }
+                if !dropped.is_empty() {
+                    import::import_paths(
+                        dropped,
+                        &app,
+                        &mpv,
+                        &state,
+                        &model,
+                        &app_weak,
+                        &sprite_timer,
+                        &sprite_tx,
+                        &scan_tx,
+                    );
                 }
                 // Coalesce every batch sitting in the channel into one
                 // `enqueue_paths` call instead of one call per batch. A large
