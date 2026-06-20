@@ -9,9 +9,10 @@ pub use ab_loop::{handle_progress_click, toggle_ab_loop};
 pub use gallery::{GalleryThumbResult, apply_gallery_thumb, toggle_gallery};
 pub use gif::tick_gif_animation;
 pub use playback::{
-    all_slideshow_wants_timer, enqueue_paths, navigate_all_relative, navigate_image_relative,
-    play_index, present_item, remove_item, reorder_item, set_mode, set_slideshow_duration,
-    show_image_at, sync_all_view_ui, sync_image_viewer_ui, toggle_slideshow,
+    advance_on_video_eof, all_slideshow_wants_timer, enqueue_paths, navigate_all_relative,
+    navigate_image_relative, play_index, present_item, remove_item, reorder_item, set_mode,
+    set_slideshow_duration, show_image_at, sync_all_view_ui, sync_image_viewer_ui,
+    toggle_slideshow,
 };
 pub use sprite_preview::{
     apply_sprite_result, hide_list_sprite_preview, schedule_sprite_generation,

@@ -186,6 +186,59 @@ pub fn all_slideshow_wants_timer(state: &AppState) -> bool {
         && state.gallery_open
 }
 
+/// Outcome of auto-advancing when mpv reports natural end-of-file.
+pub struct VideoEofAdvance {
+    /// Queue index when the new item is a video (for sprite scheduling).
+    pub video_index: Option<usize>,
+    /// Restart the image slideshow timer (All mode landed on an image).
+    pub restart_slideshow_timer: bool,
+}
+
+/// Advance to the next playable item after a video finishes. Uses the video
+/// queue in Video mode and `all_queue` in All mode (respecting search/shuffle/loop).
+pub fn advance_on_video_eof(
+    mpv: &Mpv,
+    app: &AppWindow,
+    state: &mut AppState,
+    model: &VecModel<PlaylistItemData>,
+) -> VideoEofAdvance {
+    match state.mode {
+        Mode::Video => {
+            let Some(idx) = state.queue.playable_next(
+                &state.search_query,
+                state.shuffle_on,
+                state.loop_on,
+            ) else {
+                return VideoEofAdvance {
+                    video_index: None,
+                    restart_slideshow_timer: false,
+                };
+            };
+            play_index(mpv, app, state, model, idx);
+            VideoEofAdvance {
+                video_index: Some(idx),
+                restart_slideshow_timer: false,
+            }
+        }
+        Mode::All if state.all_current_is_video => {
+            let slideshow_on = state.slideshow_on;
+            let advanced = navigate_all_relative(mpv, app, state, model, 1);
+            VideoEofAdvance {
+                video_index: if state.all_current_is_video {
+                    state.all_queue.now_playing()
+                } else {
+                    None
+                },
+                restart_slideshow_timer: advanced && slideshow_on && all_slideshow_wants_timer(state),
+            }
+        }
+        _ => VideoEofAdvance {
+            video_index: None,
+            restart_slideshow_timer: false,
+        },
+    }
+}
+
 pub fn toggle_slideshow(
     mpv: &Mpv,
     app: &AppWindow,

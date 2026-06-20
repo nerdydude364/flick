@@ -1170,56 +1170,32 @@ fn main() {
                                 app.set_playing(!paused);
                             }
                             ("eof-reached", libmpv2::events::PropertyData::Flag(true)) => {
-                                let mut state_ref = state.borrow_mut();
-                                match state_ref.mode {
-                                    ui_bridge::Mode::Video => {
-                                        if let Some(idx) = state_ref.queue.playable_next(
-                                            &state_ref.search_query,
-                                            state_ref.shuffle_on,
-                                            state_ref.loop_on,
-                                        ) {
-                                            ui_bridge::play_index(
-                                                &mpv,
-                                                &app,
-                                                &mut state_ref,
-                                                &model,
-                                                idx,
-                                            );
-                                            drop(state_ref);
-                                            ui_bridge::schedule_sprite_generation(
-                                                app_weak.clone(),
-                                                &state,
-                                                &model,
-                                                &sprite_timer,
-                                                sprite_tx.clone(),
-                                                idx,
-                                            );
-                                        }
-                                    }
-                                    ui_bridge::Mode::All if state_ref.slideshow_on => {
-                                        let advanced = ui_bridge::navigate_all_relative(
-                                            &mpv,
-                                            &app,
-                                            &mut state_ref,
-                                            &model,
-                                            1,
-                                        );
-                                        let wants_timer =
-                                            ui_bridge::all_slideshow_wants_timer(&state_ref);
-                                        drop(state_ref);
-                                        if advanced && wants_timer && app.get_slideshow_on() {
-                                            let duration = state.borrow().slideshow_duration;
-                                            start_slideshow_timer(
-                                                &mpv,
-                                                &sprite_timer,
-                                                &state,
-                                                &model,
-                                                &app_weak,
-                                                duration,
-                                            );
-                                        }
-                                    }
-                                    _ => {}
+                                let result = ui_bridge::advance_on_video_eof(
+                                    &mpv,
+                                    &app,
+                                    &mut state.borrow_mut(),
+                                    &model,
+                                );
+                                if let Some(idx) = result.video_index {
+                                    ui_bridge::schedule_sprite_generation(
+                                        app_weak.clone(),
+                                        &state,
+                                        &model,
+                                        &sprite_timer,
+                                        sprite_tx.clone(),
+                                        idx,
+                                    );
+                                }
+                                if result.restart_slideshow_timer && app.get_slideshow_on() {
+                                    let duration = state.borrow().slideshow_duration;
+                                    start_slideshow_timer(
+                                        &mpv,
+                                        &sprite_timer,
+                                        &state,
+                                        &model,
+                                        &app_weak,
+                                        duration,
+                                    );
                                 }
                             }
                             _ => {}
