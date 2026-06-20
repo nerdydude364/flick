@@ -153,15 +153,19 @@ fn start_slideshow_timer(
 /// lifecycle (setup/render/teardown), plus the one-time initial autoplay this
 /// triggers once the render context exists — see the `RenderingSetup` arm for
 /// why loading a file has to wait until then.
+struct ImportWiring {
+    sprite_timer: Rc<slint::Timer>,
+    sprite_tx: std::sync::mpsc::Sender<(String, bool)>,
+    scan_tx: std::sync::mpsc::Sender<Vec<library::ScannedFile>>,
+    startup_paths: Rc<RefCell<Vec<PathBuf>>>,
+}
+
 fn wire_video_underlay(
     app: &AppWindow,
     mpv: &Rc<Mpv>,
     state: &Rc<RefCell<AppState>>,
     model: &Rc<VecModel<PlaylistItemData>>,
-    sprite_timer: &Rc<slint::Timer>,
-    sprite_tx: &std::sync::mpsc::Sender<(String, bool)>,
-    scan_tx: &std::sync::mpsc::Sender<Vec<library::ScannedFile>>,
-    startup_paths: Rc<RefCell<Vec<PathBuf>>>,
+    import_wiring: ImportWiring,
 ) {
     let mut underlay: Option<MpvUnderlay> = None;
     let app_weak = app.as_weak();
@@ -169,9 +173,10 @@ fn wire_video_underlay(
     let mpv = Rc::clone(mpv);
     let state = Rc::clone(state);
     let model = Rc::clone(model);
-    let sprite_timer = Rc::clone(sprite_timer);
-    let sprite_tx = sprite_tx.clone();
-    let scan_tx = scan_tx.clone();
+    let sprite_timer = Rc::clone(&import_wiring.sprite_timer);
+    let sprite_tx = import_wiring.sprite_tx.clone();
+    let scan_tx = import_wiring.scan_tx.clone();
+    let startup_paths = Rc::clone(&import_wiring.startup_paths);
     app.window()
         .set_rendering_notifier(move |rendering_state, graphics_api| match rendering_state {
             slint::RenderingState::RenderingSetup => {
@@ -193,17 +198,16 @@ fn wire_video_underlay(
                 if let Some(app) = app_weak.upgrade() {
                     let paths = std::mem::take(&mut *startup_paths.borrow_mut());
                     if !paths.is_empty() {
-                        import::import_paths(
-                            paths,
-                            &app,
-                            &mpv,
-                            &state,
-                            &model,
-                            &app_weak,
-                            &sprite_timer,
-                            &sprite_tx,
-                            &scan_tx,
-                        );
+                        import::import_paths(paths, &import::ImportContext {
+                            app: &app,
+                            mpv: &mpv,
+                            state: &state,
+                            model: &model,
+                            app_weak: &app_weak,
+                            sprite_timer: &sprite_timer,
+                            sprite_tx: &sprite_tx,
+                            scan_tx: &scan_tx,
+                        });
                     }
                 }
             }
@@ -460,17 +464,16 @@ fn wire_queue_management(
             let Some(picked) = dialogs::open_media_files() else {
                 return;
             };
-            import::import_paths(
-                picked,
-                &app,
-                &mpv,
-                &state,
-                &model,
-                &app_weak,
-                &sprite_timer,
-                &sprite_tx,
-                &scan_tx,
-            );
+            import::import_paths(picked, &import::ImportContext {
+                app: &app,
+                mpv: &mpv,
+                state: &state,
+                model: &model,
+                app_weak: &app_weak,
+                sprite_timer: &sprite_timer,
+                sprite_tx: &sprite_tx,
+                scan_tx: &scan_tx,
+            });
         });
         app.on_open_videos({
             let open_media = Rc::clone(&open_media);
@@ -925,10 +928,12 @@ fn main() {
         &mpv,
         &state,
         &model,
-        &sprite_timer,
-        &sprite_tx,
-        &scan_tx,
-        Rc::clone(&startup_paths),
+        ImportWiring {
+            sprite_timer: Rc::clone(&sprite_timer),
+            sprite_tx: sprite_tx.clone(),
+            scan_tx: scan_tx.clone(),
+            startup_paths: Rc::clone(&startup_paths),
+        },
     );
     wire_playback_controls(&app, &mpv, &state);
     wire_queue_management(
@@ -986,17 +991,16 @@ fn main() {
                     dropped.push(path);
                 }
                 if !dropped.is_empty() {
-                    import::import_paths(
-                        dropped,
-                        &app,
-                        &mpv,
-                        &state,
-                        &model,
-                        &app_weak,
-                        &sprite_timer,
-                        &sprite_tx,
-                        &scan_tx,
-                    );
+                    import::import_paths(dropped, &import::ImportContext {
+                        app: &app,
+                        mpv: &mpv,
+                        state: &state,
+                        model: &model,
+                        app_weak: &app_weak,
+                        sprite_timer: &sprite_timer,
+                        sprite_tx: &sprite_tx,
+                        scan_tx: &scan_tx,
+                    });
                 }
                 // Coalesce every batch sitting in the channel into one
                 // `enqueue_paths` call instead of one call per batch. A large

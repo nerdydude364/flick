@@ -47,18 +47,22 @@ pub fn scan_folders(
     }
 }
 
+pub struct ImportContext<'a> {
+    pub app: &'a AppWindow,
+    pub mpv: &'a Rc<Mpv>,
+    pub state: &'a Rc<RefCell<AppState>>,
+    pub model: &'a Rc<VecModel<crate::PlaylistItemData>>,
+    pub app_weak: &'a slint::Weak<AppWindow>,
+    pub sprite_timer: &'a Rc<slint::Timer>,
+    pub sprite_tx: &'a std::sync::mpsc::Sender<(String, bool)>,
+    pub scan_tx: &'a std::sync::mpsc::Sender<Vec<library::ScannedFile>>,
+}
+
 /// Loads media files into the queue and kicks off background folder scans —
 /// shared by the file picker, drag-and-drop, and CLI / "Open with" launches.
 pub fn import_paths(
     paths: Vec<PathBuf>,
-    app: &AppWindow,
-    mpv: &Rc<Mpv>,
-    state: &Rc<RefCell<AppState>>,
-    model: &Rc<VecModel<crate::PlaylistItemData>>,
-    app_weak: &slint::Weak<AppWindow>,
-    sprite_timer: &Rc<slint::Timer>,
-    sprite_tx: &std::sync::mpsc::Sender<(String, bool)>,
-    scan_tx: &std::sync::mpsc::Sender<Vec<library::ScannedFile>>,
+    ctx: &ImportContext<'_>,
 ) {
     if paths.is_empty() {
         return;
@@ -67,18 +71,24 @@ pub fn import_paths(
     if !files.is_empty() {
         let named = named_media_entries(files);
         if !named.is_empty() {
-            let played = ui_bridge::enqueue_paths(mpv, app, &mut state.borrow_mut(), model, named);
+            let played = ui_bridge::enqueue_paths(
+                ctx.mpv,
+                ctx.app,
+                &mut ctx.state.borrow_mut(),
+                ctx.model,
+                named,
+            );
             if let Some(idx) = played {
                 ui_bridge::schedule_sprite_generation(
-                    app_weak.clone(),
-                    state,
-                    model,
-                    sprite_timer,
-                    sprite_tx.clone(),
+                    ctx.app_weak.clone(),
+                    ctx.state,
+                    ctx.model,
+                    ctx.sprite_timer,
+                    ctx.sprite_tx.clone(),
                     idx,
                 );
             }
         }
     }
-    scan_folders(folders, scan_tx);
+    scan_folders(folders, ctx.scan_tx);
 }
