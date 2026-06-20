@@ -418,7 +418,7 @@ fn finish_import_gallery(
     if state.all_queue.is_empty() {
         return;
     }
-    super::gallery::open_gallery_grid(mpv, app, state, gallery);
+    super::gallery::open_gallery_grid(mpv, app, state, gallery, super::gallery::GalleryReload::Force);
     sync_active_view_ui(app, state);
     super::loading::schedule_playlist_rebuild(state, model);
     sync_loading_ui(app, state);
@@ -542,7 +542,7 @@ fn show_gallery_grid(
     gallery: Option<&GalleryContext<'_>>,
 ) {
     if let Some(gallery) = gallery {
-        super::gallery::open_gallery_grid(mpv, app, state, gallery);
+        super::gallery::open_gallery_grid(mpv, app, state, gallery, super::gallery::GalleryReload::Force);
     } else {
         state.gallery_open = false;
         app.set_gallery_open(false);

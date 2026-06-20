@@ -17,16 +17,24 @@ pub struct GalleryContext<'a> {
     pub tx: &'a Sender<GalleryThumbResult>,
 }
 
+/// Whether opening the grid should always rebuild thumbnails or only when
+/// the filtered queue order drifted since the grid was last built.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GalleryReload {
+    IfStale,
+    Force,
+}
+
 pub fn return_to_gallery(
     mpv: &Mpv,
     app: &AppWindow,
     state: &mut AppState,
     gallery: &GalleryContext<'_>,
-) {
+) -> bool {
     if !state.gallery_open {
-        return;
+        return false;
     }
-    open_gallery_grid(mpv, app, state, gallery);
+    open_gallery_grid(mpv, app, state, gallery, GalleryReload::IfStale)
 }
 
 /// Back-compat alias — the UI only invokes this to leave single-item view.
@@ -35,8 +43,8 @@ pub fn toggle_gallery(
     app: &AppWindow,
     state: &mut AppState,
     gallery: &GalleryContext<'_>,
-) {
-    return_to_gallery(mpv, app, state, gallery);
+) -> bool {
+    return_to_gallery(mpv, app, state, gallery)
 }
 
 /// Show the thumbnail grid (no single-item view). Used after import and when
@@ -46,7 +54,39 @@ pub fn open_gallery_grid(
     app: &AppWindow,
     state: &mut AppState,
     gallery: &GalleryContext<'_>,
+    reload: GalleryReload,
+) -> bool {
+    prepare_gallery_view(mpv, app, state);
+
+    let needs_reload = reload == GalleryReload::Force
+        || !gallery_grid_is_current(state, gallery.thumbnails.row_count());
+
+    if !needs_reload {
+        sync_loading_ui(app, state);
+        return false;
+    }
+
+    prime_gallery_loading_state(state);
+    sync_loading_ui(app, state);
+    state.pending_gallery_reload = true;
+    true
+}
+
+/// Runs a deferred thumbnail rebuild queued by [`open_gallery_grid`].
+pub fn run_pending_gallery_reload(
+    state: &mut AppState,
+    app: &AppWindow,
+    gallery: &GalleryContext<'_>,
 ) {
+    if !state.pending_gallery_reload {
+        return;
+    }
+    state.pending_gallery_reload = false;
+    load_gallery_thumbnails(state, gallery);
+    sync_loading_ui(app, state);
+}
+
+fn prepare_gallery_view(mpv: &Mpv, app: &AppWindow, state: &mut AppState) {
     state.gallery_open = false;
     if state.slideshow_on && (state.mode == Mode::Image || state.mode == Mode::All) {
         state.slideshow_on = false;
@@ -55,14 +95,50 @@ pub fn open_gallery_grid(
             timer.stop();
         }
     }
-    if state.mode == Mode::Video
-        || (state.mode == Mode::All && state.all_current_is_video)
-    {
+    if state.mode == Mode::Video || (state.mode == Mode::All && state.all_current_is_video) {
         let _ = mpv.command("stop", &[]);
         app.set_playing(false);
     }
-    load_gallery_thumbnails(state, gallery);
     app.set_gallery_open(false);
+}
+
+fn current_gallery_order(state: &AppState) -> Vec<usize> {
+    match state.mode {
+        Mode::Video => state
+            .queue
+            .current_order(&state.search_query, state.shuffle_on),
+        Mode::Image => state
+            .image_queue
+            .current_order(&state.search_query, state.shuffle_on),
+        Mode::All => state
+            .all_queue
+            .current_order(&state.search_query, state.shuffle_on),
+    }
+}
+
+fn gallery_grid_is_current(state: &AppState, thumb_count: usize) -> bool {
+    if state.gallery_order.is_empty() || thumb_count == 0 {
+        return false;
+    }
+    if thumb_count != state.gallery_order.len() {
+        return false;
+    }
+    current_gallery_order(state) == state.gallery_order
+}
+
+fn prime_gallery_loading_state(state: &mut AppState) {
+    let Some((order, paths, _)) = gallery_source(state) else {
+        state.gallery_order.clear();
+        state.gallery_thumbs_pending = 0;
+        state.gallery_thumbs_loaded = 0;
+        return;
+    };
+    state.gallery_order = order;
+    state.gallery_thumbs_pending = paths.len();
+    state.gallery_thumbs_loaded = 0;
+}
+
+fn sync_loading_ui(app: &AppWindow, state: &AppState) {
     super::loading::sync_loading_ui(app, state);
 }
 
@@ -131,9 +207,11 @@ fn load_gallery_thumbnails(state: &mut AppState, gallery: &GalleryContext<'_>) {
     state.gallery_thumbs_pending = paths.len();
     state.gallery_thumbs_loaded = 0;
 
-    gallery
-        .thumbnails
-        .set_vec(vec![slint::Image::default(); paths.len()]);
+    if gallery.thumbnails.row_count() != paths.len() {
+        gallery
+            .thumbnails
+            .set_vec(vec![slint::Image::default(); paths.len()]);
+    }
     gallery.video_flags.set_vec(is_video.clone());
 
     let tx = gallery.tx.clone();

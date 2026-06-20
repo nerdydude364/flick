@@ -162,6 +162,34 @@ fn start_slideshow_timer(
     );
 }
 
+/// Defers a heavy gallery thumbnail rebuild until after Slint paints the grid
+/// shell with the loading overlay (see `open_gallery_grid`).
+fn schedule_pending_gallery_reload(
+    app_weak: slint::Weak<AppWindow>,
+    state: Rc<RefCell<AppState>>,
+    gallery_model: Rc<VecModel<slint::Image>>,
+    gallery_video_flags: Rc<VecModel<bool>>,
+    gallery_tx: std::sync::mpsc::Sender<ui_bridge::GalleryThumbResult>,
+) {
+    if !state.borrow().pending_gallery_reload {
+        return;
+    }
+    slint::Timer::single_shot(std::time::Duration::from_millis(0), move || {
+        let Some(app) = app_weak.upgrade() else {
+            return;
+        };
+        ui_bridge::run_pending_gallery_reload(
+            &mut state.borrow_mut(),
+            &app,
+            &ui_bridge::GalleryContext {
+                thumbnails: &gallery_model,
+                video_flags: &gallery_video_flags,
+                tx: &gallery_tx,
+            },
+        );
+    });
+}
+
 /// Creates the mpv-backed OpenGL underlay and wires it to Slint's rendering
 /// lifecycle (setup/render/teardown), plus the one-time initial autoplay this
 /// triggers once the render context exists — see the `RenderingSetup` arm for
@@ -546,6 +574,13 @@ fn wire_queue_management(
                 target,
                 Some(&gallery),
             );
+            schedule_pending_gallery_reload(
+                app_weak.clone(),
+                Rc::clone(&state),
+                Rc::clone(&gallery_model),
+                Rc::clone(&gallery_video_flags),
+                gallery_tx.clone(),
+            );
         });
     }
 
@@ -656,6 +691,13 @@ fn wire_image_viewer(
                 &gallery,
             );
             ui_bridge::sync_active_view_ui(&app, &mut state.borrow_mut());
+            schedule_pending_gallery_reload(
+                app_weak.clone(),
+                Rc::clone(&state),
+                Rc::clone(&gallery_model),
+                Rc::clone(&gallery_video_flags),
+                gallery_tx.clone(),
+            );
             if !app.get_slideshow_on() {
                 slideshow_timer.stop();
             }
@@ -1180,6 +1222,13 @@ fn main() {
                             },
                         },
                     );
+                    schedule_pending_gallery_reload(
+                        app_weak.clone(),
+                        Rc::clone(&state),
+                        Rc::clone(&gallery_model),
+                        Rc::clone(&gallery_video_flags),
+                        gallery_tx.clone(),
+                    );
                 }
                 let mut dropped = Vec::new();
                 while let Ok(path) = drop_rx.try_recv() {
@@ -1239,6 +1288,13 @@ fn main() {
                             video_flags: &gallery_video_flags,
                             tx: &gallery_tx,
                         },
+                    );
+                    schedule_pending_gallery_reload(
+                        app_weak.clone(),
+                        Rc::clone(&state),
+                        Rc::clone(&gallery_model),
+                        Rc::clone(&gallery_video_flags),
+                        gallery_tx.clone(),
                     );
                 }
                 ui_bridge::tick_playlist_rebuild(
