@@ -28,12 +28,17 @@ pub enum AbLoopState {
 pub enum Mode {
     Video,
     Image,
+    All,
 }
 
 pub struct AppState {
     pub queue: Queue,
     pub image_queue: Queue,
+    pub all_queue: Queue,
     pub mode: Mode,
+    /// When `mode == All`, whether the currently presented item is a video
+    /// (drives mpv vs image overlay visibility in the UI).
+    pub all_current_is_video: bool,
     /// Grid (false) vs fullscreen single-image (true) — separate from the
     /// window's OS-level fullscreen state, matching the original's
     /// `subMode` ('grid'/'gallery') vs `isFullscreen` distinction.
@@ -76,7 +81,9 @@ impl AppState {
         Self {
             queue: Queue::new(),
             image_queue: Queue::new(),
+            all_queue: Queue::new(),
             mode: Mode::Video,
+            all_current_is_video: false,
             gallery_open: false,
             gallery_order: Vec::new(),
             gallery_generation: 0,
@@ -132,5 +139,13 @@ impl AppState {
             .get(&hash)
             .copied()
             .unwrap_or(SpriteStatus::NotStarted)
+    }
+
+    pub fn active_queue(&self) -> &Queue {
+        match self.mode {
+            Mode::Video => &self.queue,
+            Mode::Image => &self.image_queue,
+            Mode::All => &self.all_queue,
+        }
     }
 }

@@ -60,10 +60,7 @@ pub struct ImportContext<'a> {
 
 /// Loads media files into the queue and kicks off background folder scans —
 /// shared by the file picker, drag-and-drop, and CLI / "Open with" launches.
-pub fn import_paths(
-    paths: Vec<PathBuf>,
-    ctx: &ImportContext<'_>,
-) {
+pub fn import_paths(paths: Vec<PathBuf>, ctx: &ImportContext<'_>) {
     if paths.is_empty() {
         return;
     }

@@ -2,7 +2,7 @@ pub mod ext;
 pub mod magic;
 pub mod scan;
 
-pub use ext::is_video_file;
+pub use ext::{MediaKind, is_video_file, media_kind};
 pub use scan::{ScannedFile, scan_folder};
 
 use std::path::PathBuf;

@@ -2,15 +2,23 @@ use super::gif::decode_gif;
 use super::sprite_preview::{clear_sprite_preview, hide_list_sprite_preview, sync_sprite_preview};
 use super::state::{AppState, Mode};
 use super::{log_mpv_err, rebuild_playlist_model};
+use crate::library::{MediaKind, media_kind};
 use crate::playlist::RemoveOutcome;
 use crate::{AppWindow, PlaylistItemData};
 use libmpv2::Mpv;
 use slint::VecModel;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-/// Loads `index` from the queue: updates state, issues the mpv loadfile
-/// command, and syncs the UI. Port of the playback-triggering half of
-/// `playAt` in app.js (sprite generation is Phase 3, not ported here).
+fn sync_mode_ui(app: &AppWindow, state: &AppState) {
+    app.set_view_mode(match state.mode {
+        Mode::Video => 0,
+        Mode::Image => 1,
+        Mode::All => 2,
+    });
+}
+
+/// Loads `index` from the video queue: updates state, issues the mpv loadfile
+/// command, and syncs the UI.
 pub fn play_index(
     mpv: &Mpv,
     app: &AppWindow,
@@ -18,11 +26,6 @@ pub fn play_index(
     model: &VecModel<PlaylistItemData>,
     index: usize,
 ) {
-    // Hard guard: never start/touch video playback while in image mode.
-    // Without this, e.g. loading a mixed video+image folder while browsing
-    // images silently started a video playing in the background (caught via
-    // manual testing) — autoplay-if-nothing-was-playing logic in
-    // `enqueue_video_paths` doesn't know or care what mode is currently active.
     if state.mode != Mode::Video {
         return;
     }
@@ -35,18 +38,83 @@ pub fn play_index(
         "loadfile",
         mpv.command("loadfile", &[&path.to_string_lossy(), "replace"]),
     );
-    // loadfile alone doesn't force a resume — if mpv was paused (e.g. parked at
-    // EOF via keep-open=yes), it stays paused on the new file too, desyncing
-    // the UI from actual playback state. Force it, matching the original's
-    // unconditional `videoEl.play()` on every track switch.
     log_mpv_err("resume-on-switch", mpv.set_property("pause", false));
     app.set_playing(true);
     sync_sprite_preview(app, state);
     rebuild_playlist_model(state, model);
 }
 
-/// Shows `index` from the image queue in the gallery view — image-mode
-/// equivalent of `play_index`, port of `showImageAt`.
+/// All-mode: present a video from `all_queue` via mpv.
+fn play_all_video(mpv: &Mpv, app: &AppWindow, state: &mut AppState, path: &Path) {
+    state.all_current_is_video = true;
+    app.set_current_is_video(true);
+    state.gif_animation = None;
+    log_mpv_err(
+        "loadfile",
+        mpv.command("loadfile", &[&path.to_string_lossy(), "replace"]),
+    );
+    log_mpv_err("resume-on-switch", mpv.set_property("pause", false));
+    app.set_playing(true);
+    sync_sprite_preview(app, state);
+}
+
+/// All-mode: present an image from `all_queue` in the viewer overlay.
+fn show_all_image(mpv: &Mpv, app: &AppWindow, state: &mut AppState, path: &Path) {
+    state.all_current_is_video = false;
+    app.set_current_is_video(false);
+    if log_mpv_err("pause-for-all-image", mpv.set_property("pause", true)) {
+        app.set_playing(false);
+    }
+
+    let is_gif = path
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("gif"));
+    if is_gif {
+        match decode_gif(path) {
+            Ok(anim) => {
+                app.set_current_image(anim.frames[0].0.clone());
+                state.gif_animation = Some(anim);
+                return;
+            }
+            Err(err) => eprintln!("failed to decode gif {}: {err}", path.display()),
+        }
+    }
+    state.gif_animation = None;
+    match slint::Image::load_from_path(path) {
+        Ok(img) => app.set_current_image(img),
+        Err(err) => eprintln!("failed to load image {}: {err}", path.display()),
+    }
+}
+
+/// Presents `index` from `all_queue` — video via mpv or image via overlay.
+pub fn present_item(
+    mpv: &Mpv,
+    app: &AppWindow,
+    state: &mut AppState,
+    model: &VecModel<PlaylistItemData>,
+    index: usize,
+) {
+    if state.mode != Mode::All {
+        return;
+    }
+    let Some(item) = state.all_queue.item(index) else {
+        return;
+    };
+    let path = item.path.clone();
+    state.all_queue.set_now_playing(Some(index));
+    state.gallery_open = true;
+    app.set_gallery_open(true);
+    reset_image_view_transform(app);
+
+    match media_kind(&path) {
+        MediaKind::Video => play_all_video(mpv, app, state, &path),
+        MediaKind::Image => show_all_image(mpv, app, state, &path),
+    }
+    sync_all_view_ui(app, state);
+    rebuild_playlist_model(state, model);
+}
+
+/// Shows `index` from the image queue in the gallery view — image-mode only.
 pub fn show_image_at(
     app: &AppWindow,
     state: &mut AppState,
@@ -63,11 +131,6 @@ pub fn show_image_at(
     rebuild_playlist_model(state, model);
 }
 
-/// Gallery prev/next — port of `doNavigate`. Reuses `Queue::playable_next`/
-/// `playable_prev`, the exact same filtered+shuffled-order logic the video
-/// queue uses for prev/next, since `getActiveImageIndices` in the original
-/// is the same "filtered, then reordered by shuffle" computation as
-/// `currentOrderList` — just applied to the image queue.
 pub fn navigate_image_relative(
     app: &AppWindow,
     state: &mut AppState,
@@ -91,22 +154,64 @@ pub fn navigate_image_relative(
     }
 }
 
-/// Port of the slideshow toggle button's click handler. Doesn't itself
-/// start/stop a timer (main.rs owns that) — just flips the flag and, if the
-/// gallery wasn't open yet, jumps to the first image so there's something to
-/// show, matching `slideshowBtn`'s `if (currentIdx < 0 ...) onNavigate(0)`.
-pub fn toggle_slideshow(app: &AppWindow, state: &mut AppState, model: &VecModel<PlaylistItemData>) {
-    // Only allow toggling slideshow while in Image mode.
-    if state.mode != Mode::Image {
+pub fn navigate_all_relative(
+    mpv: &Mpv,
+    app: &AppWindow,
+    state: &mut AppState,
+    model: &VecModel<PlaylistItemData>,
+    delta: i32,
+) -> bool {
+    let next = if delta < 0 {
+        state
+            .all_queue
+            .playable_prev(&state.search_query, state.shuffle_on, state.loop_on)
+    } else {
+        state
+            .all_queue
+            .playable_next(&state.search_query, state.shuffle_on, state.loop_on)
+    };
+    if let Some(idx) = next {
+        present_item(mpv, app, state, model, idx);
+        true
+    } else {
+        false
+    }
+}
+
+/// Returns true when the slideshow timer should be running (image on screen).
+pub fn all_slideshow_wants_timer(state: &AppState) -> bool {
+    state.mode == Mode::All
+        && state.slideshow_on
+        && !state.all_current_is_video
+        && state.gallery_open
+}
+
+pub fn toggle_slideshow(
+    mpv: &Mpv,
+    app: &AppWindow,
+    state: &mut AppState,
+    model: &VecModel<PlaylistItemData>,
+) {
+    if state.mode != Mode::Image && state.mode != Mode::All {
         return;
     }
     state.slideshow_on = !state.slideshow_on;
     app.set_slideshow_on(state.slideshow_on);
-    if state.slideshow_on
-        && state.image_queue.now_playing().is_none()
-        && !state.image_queue.is_empty()
-    {
-        show_image_at(app, state, model, 0);
+    if !state.slideshow_on {
+        return;
+    }
+    match state.mode {
+        Mode::Image => {
+            if state.image_queue.now_playing().is_none() && !state.image_queue.is_empty() {
+                show_image_at(app, state, model, 0);
+            }
+        }
+        Mode::All => {
+            if state.all_queue.now_playing().is_none() && !state.all_queue.is_empty() {
+                present_item(mpv, app, state, model, 0);
+            }
+        }
+        Mode::Video => {}
     }
 }
 
@@ -115,9 +220,29 @@ pub fn set_slideshow_duration(app: &AppWindow, state: &mut AppState, seconds: f6
     app.set_slideshow_duration_text(format!("{}s", state.slideshow_duration.round() as i64).into());
 }
 
-/// Pushes the current image-queue state to the AppWindow's display
-/// properties: which image to show, its name, and the "N / total" counter.
-/// Decodes and starts an animation if the image is a GIF.
+pub fn sync_all_view_ui(app: &AppWindow, state: &mut AppState) {
+    let order = state
+        .all_queue
+        .current_order(&state.search_query, state.shuffle_on);
+    let now_playing = state.all_queue.now_playing();
+    app.set_gallery_open(state.gallery_open);
+    app.set_has_media(!state.all_queue.is_empty());
+    app.set_current_is_video(state.all_current_is_video);
+
+    let Some(index) = now_playing else {
+        state.gif_animation = None;
+        app.set_media_counter_text("".into());
+        app.set_media_position(0);
+        app.set_media_total(0);
+        return;
+    };
+    if let Some(pos) = order.iter().position(|&i| i == index) {
+        app.set_media_counter_text(format!("{} / {}", pos + 1, order.len()).into());
+        app.set_media_position((pos + 1) as i32);
+        app.set_media_total(order.len() as i32);
+    }
+}
+
 pub fn sync_image_viewer_ui(app: &AppWindow, state: &mut AppState) {
     let order = state
         .image_queue
@@ -164,20 +289,16 @@ pub fn sync_image_viewer_ui(app: &AppWindow, state: &mut AppState) {
     }
 }
 
-/// Resets zoom/rotation when switching images — transforms are per-image view state.
 fn reset_image_view_transform(app: &AppWindow) {
     app.set_image_zoom(100.0);
     app.set_image_rotation_deg(0.0);
 }
 
-/// Adds `paths` (already name-resolved) to the video queue and runs the same
-/// post-add orchestration `enqueue()` does in app.js: autoplay if nothing
-/// was playing yet, or fold new items into the shuffle order (and jump to
-/// the new first item) if shuffle was already on. Returns the index that was
-/// just auto-played, if any, so the caller can schedule sprite generation
-/// for it — that needs the `Rc<RefCell<AppState>>` this function doesn't
-/// have (it only ever sees the already-borrowed `&mut AppState`), so it's
-/// the caller's job, same as every other play_index call site.
+fn remove_from_typed_queues(state: &mut AppState, path: &PathBuf) {
+    let _ = state.queue.remove_by_path(path);
+    let _ = state.image_queue.remove_by_path(path);
+}
+
 fn enqueue_video_paths(
     mpv: &Mpv,
     app: &AppWindow,
@@ -199,21 +320,11 @@ fn enqueue_video_paths(
             return Some(idx);
         }
     } else if state.mode == Mode::Video {
-        // The sidebar only ever shows whichever queue matches the active
-        // mode (see `rebuild_playlist_model`) — skip the rebuild when it's
-        // not this queue's turn rather than redoing the *other* queue's
-        // identical render. A folder scan with both videos and images
-        // mixed into the same drained batch otherwise rebuilds the model
-        // twice per tick, once from each of `enqueue_video_paths`/
-        // `enqueue_image_paths`, for the entire rest of the import.
         rebuild_playlist_model(state, model);
     }
     None
 }
 
-/// Image-queue equivalent of `enqueue_video_paths` — port of `enqueue()`'s
-/// image-handling half: show the first image if nothing was showing, or
-/// `reshuffleImages()`'s keep-current-first behavior if shuffle was already on.
 fn enqueue_image_paths(
     app: &AppWindow,
     state: &mut AppState,
@@ -236,17 +347,35 @@ fn enqueue_image_paths(
             rebuild_playlist_model(state, model);
         }
     } else if state.mode == Mode::Image {
-        // See the matching comment in `enqueue_video_paths`.
         rebuild_playlist_model(state, model);
     }
 }
 
-/// Splits `paths` by media kind and routes each to its queue — port of
-/// `enqueue()`'s dispatch loop plus its auto-switch-mode logic ("if all
-/// newly-added files are one type, switch to that mode"). Returns the video
-/// queue index that was just auto-played, if any — see
-/// `enqueue_video_paths`'s doc comment for why the caller has to be the one
-/// to schedule sprite generation for it.
+fn finish_all_enqueue(
+    mpv: &Mpv,
+    app: &AppWindow,
+    state: &mut AppState,
+    model: &VecModel<PlaylistItemData>,
+    had_items_before: bool,
+) {
+    if state.mode != Mode::All {
+        return;
+    }
+
+    if state.all_queue.now_playing().is_none() {
+        if !state.all_queue.is_empty() {
+            present_item(mpv, app, state, model, 0);
+        }
+    } else if state.shuffle_on && had_items_before {
+        if let Some(idx) = state.all_queue.reshuffle_jump_to_first(&state.search_query) {
+            present_item(mpv, app, state, model, idx);
+        }
+    } else {
+        sync_all_view_ui(app, state);
+        rebuild_playlist_model(state, model);
+    }
+}
+
 pub fn enqueue_paths(
     mpv: &Mpv,
     app: &AppWindow,
@@ -254,13 +383,29 @@ pub fn enqueue_paths(
     model: &VecModel<PlaylistItemData>,
     named_paths: Vec<(String, PathBuf, Option<u64>)>,
 ) -> Option<usize> {
+    let has_video = named_paths
+        .iter()
+        .any(|(_, p, _)| crate::library::is_video_file(p));
+    let has_image = named_paths
+        .iter()
+        .any(|(_, p, _)| !crate::library::is_video_file(p));
+
+    let had_all_before = !state.all_queue.is_empty();
+    state.all_queue.enqueue(
+        named_paths
+            .iter()
+            .map(|(n, p, s)| (n.clone(), p.clone(), *s)),
+    );
+
     let (videos, images): (Vec<_>, Vec<_>) = named_paths
         .into_iter()
         .partition(|(_, p, _)| crate::library::is_video_file(p));
 
-    if !images.is_empty() && videos.is_empty() {
+    if has_video && has_image {
+        set_mode(mpv, app, state, model, Mode::All);
+    } else if has_image && !has_video {
         set_mode(mpv, app, state, model, Mode::Image);
-    } else if !videos.is_empty() && images.is_empty() {
+    } else if has_video && !has_image {
         set_mode(mpv, app, state, model, Mode::Video);
     }
 
@@ -272,15 +417,10 @@ pub fn enqueue_paths(
     if !images.is_empty() {
         enqueue_image_paths(app, state, model, images);
     }
+    finish_all_enqueue(mpv, app, state, model, had_all_before);
     played_index
 }
 
-/// Port of `switchMode` (minus the title-bar update, which this app doesn't
-/// have yet) — plus auto-pausing video when leaving video mode, since
-/// nothing shows it anymore and it would otherwise keep decoding/playing
-/// audio in the background (confirmed via manual testing this was confusing,
-/// not present in the original since the original never explicitly asked for
-/// it either way, so this is a deliberate native-app improvement).
 pub fn set_mode(
     mpv: &Mpv,
     app: &AppWindow,
@@ -291,15 +431,11 @@ pub fn set_mode(
     if state.mode == mode {
         return;
     }
-    if state.mode == Mode::Video
-        && mode == Mode::Image
-        && log_mpv_err("auto-pause on mode switch", mpv.set_property("pause", true))
-    {
+    let leaving_video = state.mode == Mode::Video && mode != Mode::Video;
+    if leaving_video && log_mpv_err("auto-pause on mode switch", mpv.set_property("pause", true)) {
         app.set_playing(false);
     }
-    state.mode = mode;
-    // Enforce that slideshow is always off in video mode.
-    if state.mode == Mode::Video {
+    if mode == Mode::Video {
         if state.slideshow_on {
             state.slideshow_on = false;
             app.set_slideshow_on(false);
@@ -308,18 +444,34 @@ pub fn set_mode(
             timer.stop();
         }
     }
-    app.set_image_mode(mode == Mode::Image);
-    if mode == Mode::Image {
-        clear_sprite_preview(app);
-        hide_list_sprite_preview(app);
+    state.mode = mode;
+    sync_mode_ui(app, state);
+
+    match mode {
+        Mode::Image => {
+            clear_sprite_preview(app);
+            hide_list_sprite_preview(app);
+            sync_image_viewer_ui(app, state);
+        }
+        Mode::Video => {
+            clear_sprite_preview(app);
+            hide_list_sprite_preview(app);
+        }
+        Mode::All => {
+            clear_sprite_preview(app);
+            hide_list_sprite_preview(app);
+            if state.all_queue.now_playing().is_none() && !state.all_queue.is_empty() {
+                present_item(mpv, app, state, model, 0);
+            } else if let Some(idx) = state.all_queue.now_playing() {
+                present_item(mpv, app, state, model, idx);
+            } else {
+                sync_all_view_ui(app, state);
+            }
+        }
     }
-    sync_image_viewer_ui(app, state);
     rebuild_playlist_model(state, model);
 }
 
-/// Removes `index` from whichever queue is active — port of the
-/// orchestration half of `removeVideoAt`/`removeImageAt` (the
-/// data-structure half, shared by both, is `Queue::remove_at`).
 pub fn remove_item(
     mpv: &Mpv,
     app: &AppWindow,
@@ -327,8 +479,8 @@ pub fn remove_item(
     model: &VecModel<PlaylistItemData>,
     index: usize,
 ) {
-    if state.mode == Mode::Video {
-        match state.queue.remove_at(index) {
+    match state.mode {
+        Mode::Video => match state.queue.remove_at(index) {
             RemoveOutcome::QueueEmpty => {
                 let _ = mpv.command("stop", &[]);
                 app.set_playing(false);
@@ -338,9 +490,8 @@ pub fn remove_item(
                 play_index(mpv, app, state, model, new_index)
             }
             RemoveOutcome::NoPlaybackChange => rebuild_playlist_model(state, model),
-        }
-    } else {
-        match state.image_queue.remove_at(index) {
+        },
+        Mode::Image => match state.image_queue.remove_at(index) {
             RemoveOutcome::QueueEmpty => {
                 state.gallery_open = false;
                 sync_image_viewer_ui(app, state);
@@ -353,14 +504,35 @@ pub fn remove_item(
                 sync_image_viewer_ui(app, state);
                 rebuild_playlist_model(state, model);
             }
+        },
+        Mode::All => {
+            let path = state.all_queue.item(index).map(|item| item.path.clone());
+            let Some(path) = path else {
+                return;
+            };
+            match state.all_queue.remove_at(index) {
+                RemoveOutcome::QueueEmpty => {
+                    remove_from_typed_queues(state, &path);
+                    let _ = mpv.command("stop", &[]);
+                    app.set_playing(false);
+                    state.gallery_open = false;
+                    sync_all_view_ui(app, state);
+                    rebuild_playlist_model(state, model);
+                }
+                RemoveOutcome::NowPlayingChanged(new_index) => {
+                    remove_from_typed_queues(state, &path);
+                    present_item(mpv, app, state, model, new_index);
+                }
+                RemoveOutcome::NoPlaybackChange => {
+                    remove_from_typed_queues(state, &path);
+                    sync_all_view_ui(app, state);
+                    rebuild_playlist_model(state, model);
+                }
+            }
         }
     }
 }
 
-/// Reorders whichever queue is active after a drag gesture. `dst` is the
-/// *visual* row index the item was dropped on (not yet adjusted for
-/// removal) — port of the drop handler's `effectiveDst = dst > src ? dst -
-/// 1 : dst` adjustment, which `Queue::move_item` itself expects already applied.
 pub fn reorder_item(
     state: &mut AppState,
     model: &VecModel<PlaylistItemData>,
@@ -371,10 +543,10 @@ pub fn reorder_item(
         return;
     }
     let effective_dst = if dst > src { dst - 1 } else { dst };
-    if state.mode == Mode::Video {
-        state.queue.move_item(src, effective_dst);
-    } else {
-        state.image_queue.move_item(src, effective_dst);
+    match state.mode {
+        Mode::Video => state.queue.move_item(src, effective_dst),
+        Mode::Image => state.image_queue.move_item(src, effective_dst),
+        Mode::All => state.all_queue.move_item(src, effective_dst),
     }
     rebuild_playlist_model(state, model);
 }
