@@ -67,7 +67,11 @@ export component AppWindow inherits Window {
     in property <string> image-counter-text: "";
     in property <int> image-position: 0;
     in property <int> image-total: 0;
+    in property <string> video-counter-text: "";
+    in property <int> video-position: 0;
+    in property <int> video-total: 0;
     in property <bool> has-images: false;
+    in property <bool> has-videos: false;
     in property <bool> has-media: false;
     in property <string> media-counter-text: "";
     in property <int> media-position: 0;
@@ -80,14 +84,14 @@ export component AppWindow inherits Window {
     property <bool> image-mode: view-mode == 1;
     property <bool> all-mode: view-mode == 2;
     property <bool> video-mode: view-mode == 0;
-    property <bool> show-image-viewer: view-mode == 1 || (view-mode == 2 && !(current-is-video && gallery-open));
-    property <bool> show-video-canvas: view-mode == 0 || (view-mode == 2 && current-is-video && gallery-open);
-    property <string> counter-text: view-mode == 2 ? media-counter-text : image-counter-text;
-    property <int> counter-position: view-mode == 2 ? media-position : image-position;
-    property <int> counter-total: view-mode == 2 ? media-total : image-total;
+    property <bool> show-image-viewer: image-mode || (all-mode && !(current-is-video && gallery-open)) || (video-mode && !gallery-open);
+    property <bool> show-video-canvas: (video-mode && gallery-open) || (all-mode && current-is-video && gallery-open);
+    property <string> counter-text: all-mode ? media-counter-text : (video-mode ? video-counter-text : image-counter-text);
+    property <int> counter-position: all-mode ? media-position : (video-mode ? video-position : image-position);
+    property <int> counter-total: all-mode ? media-total : (video-mode ? video-total : image-total);
     property <bool> slideshow-transport: image-mode || all-mode;
-    property <bool> show-video-scrub: video-mode || (all-mode && current-is-video && gallery-open && !slideshow-on);
-    property <bool> has-library-items: view-mode == 2 ? has-media : has-images;
+    property <bool> show-video-scrub: (video-mode && gallery-open) || (all-mode && current-is-video && gallery-open && !slideshow-on);
+    property <bool> has-library-items: all-mode ? has-media : (video-mode ? has-videos : has-images);
 
     // Manual, persistent drawer state (toggled via the handle next to the
     // sidebar) — independent of `chrome-visible` below.
@@ -200,7 +204,7 @@ export component AppWindow inherits Window {
             rotation-deg: image-rotation-deg;
             gallery-thumbnails: gallery-thumbnails;
             gallery-is-video: gallery-is-video;
-            gallery-current-index: (view-mode == 2 ? media-position : image-position) - 1;
+            gallery-current-index: counter-position - 1;
             navigate(delta) => { navigate-image(delta); key-handler.focus(); }
             open-images => { open-images(); }
             toggle-fullscreen => { toggle-fullscreen(); key-handler.focus(); }
@@ -469,7 +473,7 @@ export component AppWindow inherits Window {
                     }
                 }
 
-                if all-mode: HorizontalLayout {
+                if video-mode || all-mode: HorizontalLayout {
                     spacing: 8px;
                     IconButton {
                         icon: @image-url("icons/grid.svg");

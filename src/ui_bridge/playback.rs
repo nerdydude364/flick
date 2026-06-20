@@ -1,3 +1,4 @@
+use super::gallery::GalleryContext;
 use super::gif::decode_gif;
 use super::sprite_preview::{clear_sprite_preview, hide_list_sprite_preview, sync_sprite_preview};
 use super::state::{AppState, Mode};
@@ -33,6 +34,8 @@ pub fn play_index(
         return;
     }
     state.queue.set_now_playing(Some(index));
+    state.gallery_open = true;
+    app.set_gallery_open(true);
     let path = state.queue.item(index).unwrap().path.clone();
     log_mpv_err(
         "loadfile",
@@ -41,6 +44,7 @@ pub fn play_index(
     log_mpv_err("resume-on-switch", mpv.set_property("pause", false));
     app.set_playing(true);
     sync_sprite_preview(app, state);
+    sync_video_view_ui(app, state);
     rebuild_playlist_model(state, model);
 }
 
@@ -273,6 +277,35 @@ pub fn set_slideshow_duration(app: &AppWindow, state: &mut AppState, seconds: f6
     app.set_slideshow_duration_text(format!("{}s", state.slideshow_duration.round() as i64).into());
 }
 
+pub fn sync_active_view_ui(app: &AppWindow, state: &mut AppState) {
+    match state.mode {
+        Mode::Video => sync_video_view_ui(app, state),
+        Mode::Image => sync_image_viewer_ui(app, state),
+        Mode::All => sync_all_view_ui(app, state),
+    }
+}
+
+pub fn sync_video_view_ui(app: &AppWindow, state: &AppState) {
+    let order = state
+        .queue
+        .current_order(&state.search_query, state.shuffle_on);
+    let now_playing = state.queue.now_playing();
+    app.set_gallery_open(state.gallery_open);
+    app.set_has_videos(!state.queue.is_empty());
+
+    let Some(index) = now_playing else {
+        app.set_video_counter_text("".into());
+        app.set_video_position(0);
+        app.set_video_total(0);
+        return;
+    };
+    if let Some(pos) = order.iter().position(|&i| i == index) {
+        app.set_video_counter_text(format!("{} / {}", pos + 1, order.len()).into());
+        app.set_video_position((pos + 1) as i32);
+        app.set_video_total(order.len() as i32);
+    }
+}
+
 pub fn sync_all_view_ui(app: &AppWindow, state: &mut AppState) {
     let order = state
         .all_queue
@@ -353,80 +386,40 @@ fn remove_from_typed_queues(state: &mut AppState, path: &PathBuf) {
 }
 
 fn enqueue_video_paths(
-    mpv: &Mpv,
-    app: &AppWindow,
     state: &mut AppState,
     model: &VecModel<PlaylistItemData>,
     named_paths: Vec<(String, PathBuf, Option<u64>)>,
-) -> Option<usize> {
-    let had_items_before = !state.queue.is_empty();
+) {
     state.queue.enqueue(named_paths);
-
-    if state.queue.now_playing().is_none() {
-        if !state.queue.is_empty() {
-            play_index(mpv, app, state, model, 0);
-            return Some(0);
-        }
-    } else if state.shuffle_on && had_items_before {
-        if let Some(idx) = state.queue.reshuffle_jump_to_first(&state.search_query) {
-            play_index(mpv, app, state, model, idx);
-            return Some(idx);
-        }
-    } else if state.mode == Mode::Video {
+    if state.mode == Mode::Video {
         rebuild_playlist_model(state, model);
     }
-    None
 }
 
 fn enqueue_image_paths(
-    app: &AppWindow,
     state: &mut AppState,
     model: &VecModel<PlaylistItemData>,
     named_paths: Vec<(String, PathBuf, Option<u64>)>,
 ) {
-    let had_items_before = !state.image_queue.is_empty();
     state.image_queue.enqueue(named_paths);
-
-    if state.image_queue.now_playing().is_none() {
-        if !state.image_queue.is_empty() {
-            show_image_at(app, state, model, 0);
-        }
-    } else if state.shuffle_on && had_items_before {
-        state
-            .image_queue
-            .reshuffle_keep_current_first(&state.search_query);
-        sync_image_viewer_ui(app, state);
-        if state.mode == Mode::Image {
-            rebuild_playlist_model(state, model);
-        }
-    } else if state.mode == Mode::Image {
+    if state.mode == Mode::Image {
         rebuild_playlist_model(state, model);
     }
 }
 
-fn finish_all_enqueue(
+fn finish_import_gallery(
     mpv: &Mpv,
     app: &AppWindow,
     state: &mut AppState,
     model: &VecModel<PlaylistItemData>,
-    had_items_before: bool,
+    gallery: &GalleryContext<'_>,
 ) {
-    if state.mode != Mode::All {
+    if state.all_queue.is_empty() {
         return;
     }
-
-    if state.all_queue.now_playing().is_none() {
-        if !state.all_queue.is_empty() {
-            present_item(mpv, app, state, model, 0);
-        }
-    } else if state.shuffle_on && had_items_before {
-        if let Some(idx) = state.all_queue.reshuffle_jump_to_first(&state.search_query) {
-            present_item(mpv, app, state, model, idx);
-        }
-    } else {
-        sync_all_view_ui(app, state);
-        rebuild_playlist_model(state, model);
-    }
+    super::gallery::open_gallery_grid(mpv, app, state, gallery);
+    sync_active_view_ui(app, state);
+    rebuild_playlist_model(state, model);
 }
 
 pub fn enqueue_paths(
@@ -435,15 +428,8 @@ pub fn enqueue_paths(
     state: &mut AppState,
     model: &VecModel<PlaylistItemData>,
     named_paths: Vec<(String, PathBuf, Option<u64>)>,
-) -> Option<usize> {
-    let has_video = named_paths
-        .iter()
-        .any(|(_, p, _)| crate::library::is_video_file(p));
-    let has_image = named_paths
-        .iter()
-        .any(|(_, p, _)| !crate::library::is_video_file(p));
-
-    let had_all_before = !state.all_queue.is_empty();
+    gallery: &GalleryContext<'_>,
+) {
     state.all_queue.enqueue(
         named_paths
             .iter()
@@ -454,24 +440,13 @@ pub fn enqueue_paths(
         .into_iter()
         .partition(|(_, p, _)| crate::library::is_video_file(p));
 
-    if has_video && has_image {
-        set_mode(mpv, app, state, model, Mode::All);
-    } else if has_image && !has_video {
-        set_mode(mpv, app, state, model, Mode::Image);
-    } else if has_video && !has_image {
-        set_mode(mpv, app, state, model, Mode::Video);
-    }
+    enqueue_video_paths(state, model, videos);
+    enqueue_image_paths(state, model, images);
 
-    let played_index = if !videos.is_empty() {
-        enqueue_video_paths(mpv, app, state, model, videos)
-    } else {
-        None
-    };
-    if !images.is_empty() {
-        enqueue_image_paths(app, state, model, images);
+    if state.mode != Mode::All {
+        set_mode(mpv, app, state, model, Mode::All, None);
     }
-    finish_all_enqueue(mpv, app, state, model, had_all_before);
-    played_index
+    finish_import_gallery(mpv, app, state, model, gallery);
 }
 
 pub fn set_mode(
@@ -480,6 +455,7 @@ pub fn set_mode(
     state: &mut AppState,
     model: &VecModel<PlaylistItemData>,
     mode: Mode,
+    gallery: Option<&GalleryContext<'_>>,
 ) {
     if state.mode == mode {
         return;
@@ -500,29 +476,66 @@ pub fn set_mode(
     state.mode = mode;
     sync_mode_ui(app, state);
 
+    clear_sprite_preview(app);
+    hide_list_sprite_preview(app);
+    enter_mode_view(mpv, app, state, model, gallery, mode);
+    rebuild_playlist_model(state, model);
+}
+
+fn enter_mode_view(
+    mpv: &Mpv,
+    app: &AppWindow,
+    state: &mut AppState,
+    model: &VecModel<PlaylistItemData>,
+    gallery: Option<&GalleryContext<'_>>,
+    mode: Mode,
+) {
     match mode {
         Mode::Image => {
-            clear_sprite_preview(app);
-            hide_list_sprite_preview(app);
-            sync_image_viewer_ui(app, state);
+            if let Some(idx) = state.image_queue.now_playing() {
+                show_image_at(app, state, model, idx);
+            } else if !state.image_queue.is_empty() {
+                show_gallery_grid(mpv, app, state, gallery);
+                sync_image_viewer_ui(app, state);
+            } else {
+                sync_image_viewer_ui(app, state);
+            }
         }
         Mode::Video => {
-            clear_sprite_preview(app);
-            hide_list_sprite_preview(app);
+            if let Some(idx) = state.queue.now_playing() {
+                play_index(mpv, app, state, model, idx);
+            } else if !state.queue.is_empty() {
+                show_gallery_grid(mpv, app, state, gallery);
+                sync_video_view_ui(app, state);
+            } else {
+                sync_video_view_ui(app, state);
+            }
         }
         Mode::All => {
-            clear_sprite_preview(app);
-            hide_list_sprite_preview(app);
-            if state.all_queue.now_playing().is_none() && !state.all_queue.is_empty() {
-                present_item(mpv, app, state, model, 0);
-            } else if let Some(idx) = state.all_queue.now_playing() {
+            if let Some(idx) = state.all_queue.now_playing() {
                 present_item(mpv, app, state, model, idx);
+            } else if !state.all_queue.is_empty() {
+                show_gallery_grid(mpv, app, state, gallery);
+                sync_all_view_ui(app, state);
             } else {
                 sync_all_view_ui(app, state);
             }
         }
     }
-    rebuild_playlist_model(state, model);
+}
+
+fn show_gallery_grid(
+    mpv: &Mpv,
+    app: &AppWindow,
+    state: &mut AppState,
+    gallery: Option<&GalleryContext<'_>>,
+) {
+    if let Some(gallery) = gallery {
+        super::gallery::open_gallery_grid(mpv, app, state, gallery);
+    } else {
+        state.gallery_open = false;
+        app.set_gallery_open(false);
+    }
 }
 
 pub fn remove_item(
@@ -537,6 +550,8 @@ pub fn remove_item(
             RemoveOutcome::QueueEmpty => {
                 let _ = mpv.command("stop", &[]);
                 app.set_playing(false);
+                state.gallery_open = false;
+                sync_video_view_ui(app, state);
                 rebuild_playlist_model(state, model);
             }
             RemoveOutcome::NowPlayingChanged(new_index) => {

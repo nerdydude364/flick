@@ -167,10 +167,11 @@ fn start_slideshow_timer(
 /// triggers once the render context exists — see the `RenderingSetup` arm for
 /// why loading a file has to wait until then.
 struct ImportWiring {
-    sprite_timer: Rc<slint::Timer>,
-    sprite_tx: std::sync::mpsc::Sender<(String, bool)>,
     scan_tx: std::sync::mpsc::Sender<Vec<library::ScannedFile>>,
     startup_paths: Rc<RefCell<Vec<PathBuf>>>,
+    gallery_model: Rc<VecModel<slint::Image>>,
+    gallery_video_flags: Rc<VecModel<bool>>,
+    gallery_tx: std::sync::mpsc::Sender<ui_bridge::GalleryThumbResult>,
 }
 
 fn wire_video_underlay(
@@ -186,10 +187,11 @@ fn wire_video_underlay(
     let mpv = Rc::clone(mpv);
     let state = Rc::clone(state);
     let model = Rc::clone(model);
-    let sprite_timer = Rc::clone(&import_wiring.sprite_timer);
-    let sprite_tx = import_wiring.sprite_tx.clone();
     let scan_tx = import_wiring.scan_tx.clone();
     let startup_paths = Rc::clone(&import_wiring.startup_paths);
+    let gallery_model = Rc::clone(&import_wiring.gallery_model);
+    let gallery_video_flags = Rc::clone(&import_wiring.gallery_video_flags);
+    let gallery_tx = import_wiring.gallery_tx.clone();
     app.window()
         .set_rendering_notifier(move |rendering_state, graphics_api| match rendering_state {
             slint::RenderingState::RenderingSetup => {
@@ -208,24 +210,27 @@ fn wire_video_underlay(
                 // render context attached yet, fails ("No render context set"),
                 // and falls back to audio-only with no retry. This was the
                 // actual cause of an earlier "black video, audio plays fine" bug.
-                if let Some(app) = app_weak.upgrade() {
-                    let paths = std::mem::take(&mut *startup_paths.borrow_mut());
-                    if !paths.is_empty() {
-                        import::import_paths(
-                            paths,
-                            &import::ImportContext {
-                                app: &app,
-                                mpv: &mpv,
-                                state: &state,
-                                model: &model,
-                                app_weak: &app_weak,
-                                sprite_timer: &sprite_timer,
-                                sprite_tx: &sprite_tx,
-                                scan_tx: &scan_tx,
-                            },
-                        );
+                    if let Some(app) = app_weak.upgrade() {
+                        let paths = std::mem::take(&mut *startup_paths.borrow_mut());
+                        if !paths.is_empty() {
+                            let gallery = ui_bridge::GalleryContext {
+                                thumbnails: &gallery_model,
+                                video_flags: &gallery_video_flags,
+                                tx: &gallery_tx,
+                            };
+                            import::import_paths(
+                                paths,
+                                &import::ImportContext {
+                                    app: &app,
+                                    mpv: &mpv,
+                                    state: &state,
+                                    model: &model,
+                                    scan_tx: &scan_tx,
+                                    gallery,
+                                },
+                            );
+                        }
                     }
-                }
             }
             slint::RenderingState::BeforeRendering => {
                 if let (Some(underlay), Some(app)) = (underlay.as_ref(), app_weak.upgrade()) {
@@ -237,7 +242,7 @@ fn wire_video_underlay(
                     // own update callback still wakes the loop if video
                     // genuinely has a new frame, so switching back to
                     // video mode doesn't need anything special to resume.
-                    if app.get_view_mode() == 0
+                    if (app.get_view_mode() == 0 && app.get_gallery_open())
                         || (app.get_view_mode() == 2
                             && app.get_current_is_video()
                             && app.get_gallery_open())
@@ -423,9 +428,10 @@ fn wire_queue_management(
     mpv: &Rc<Mpv>,
     state: &Rc<RefCell<AppState>>,
     model: &Rc<VecModel<PlaylistItemData>>,
-    sprite_timer: &Rc<slint::Timer>,
-    sprite_tx: &std::sync::mpsc::Sender<(String, bool)>,
     scan_tx: &std::sync::mpsc::Sender<Vec<library::ScannedFile>>,
+    gallery_model: &Rc<VecModel<slint::Image>>,
+    gallery_video_flags: &Rc<VecModel<bool>>,
+    gallery_tx: &std::sync::mpsc::Sender<ui_bridge::GalleryThumbResult>,
 ) {
     {
         let state = Rc::clone(state);
@@ -470,9 +476,10 @@ fn wire_queue_management(
         let state = Rc::clone(state);
         let model = Rc::clone(model);
         let app_weak = app.as_weak();
-        let sprite_timer = Rc::clone(sprite_timer);
-        let sprite_tx = sprite_tx.clone();
         let scan_tx = scan_tx.clone();
+        let gallery_model = Rc::clone(gallery_model);
+        let gallery_video_flags = Rc::clone(gallery_video_flags);
+        let gallery_tx = gallery_tx.clone();
         let open_media: Rc<dyn Fn()> = Rc::new(move || {
             let Some(app) = app_weak.upgrade() else {
                 return;
@@ -487,10 +494,12 @@ fn wire_queue_management(
                     mpv: &mpv,
                     state: &state,
                     model: &model,
-                    app_weak: &app_weak,
-                    sprite_timer: &sprite_timer,
-                    sprite_tx: &sprite_tx,
                     scan_tx: &scan_tx,
+                    gallery: ui_bridge::GalleryContext {
+                        thumbnails: &gallery_model,
+                        video_flags: &gallery_video_flags,
+                        tx: &gallery_tx,
+                    },
                 },
             );
         });
@@ -506,6 +515,9 @@ fn wire_queue_management(
         let state = Rc::clone(state);
         let model = Rc::clone(model);
         let app_weak = app.as_weak();
+        let gallery_model = Rc::clone(gallery_model);
+        let gallery_video_flags = Rc::clone(gallery_video_flags);
+        let gallery_tx = gallery_tx.clone();
         app.on_set_view_mode(move |mode| {
             let Some(app) = app_weak.upgrade() else {
                 return;
@@ -515,7 +527,19 @@ fn wire_queue_management(
                 1 => ui_bridge::Mode::Image,
                 _ => ui_bridge::Mode::All,
             };
-            ui_bridge::set_mode(&mpv, &app, &mut state.borrow_mut(), &model, target);
+            let gallery = ui_bridge::GalleryContext {
+                thumbnails: &gallery_model,
+                video_flags: &gallery_video_flags,
+                tx: &gallery_tx,
+            };
+            ui_bridge::set_mode(
+                &mpv,
+                &app,
+                &mut state.borrow_mut(),
+                &model,
+                target,
+                Some(&gallery),
+            );
         });
     }
 
@@ -532,8 +556,10 @@ fn wire_queue_management(
             match state.mode {
                 ui_bridge::Mode::Video => {
                     state.queue.clear();
+                    state.gallery_open = false;
                     ui_bridge::log_mpv_err("stop", mpv.command("stop", &[]));
                     app.set_playing(false);
+                    ui_bridge::sync_video_view_ui(&app, &state);
                 }
                 ui_bridge::Mode::Image => {
                     state.image_queue.clear();
@@ -567,6 +593,8 @@ fn wire_image_viewer(
     gallery_video_flags: &Rc<VecModel<bool>>,
     gallery_tx: &std::sync::mpsc::Sender<ui_bridge::GalleryThumbResult>,
     slideshow_timer: &Rc<slint::Timer>,
+    sprite_timer: &Rc<slint::Timer>,
+    sprite_tx: &std::sync::mpsc::Sender<(String, bool)>,
 ) {
     {
         let mpv = Rc::clone(mpv);
@@ -599,6 +627,7 @@ fn wire_image_viewer(
     let slideshow_timer = Rc::clone(slideshow_timer);
 
     {
+        let mpv = Rc::clone(mpv);
         let state = Rc::clone(state);
         let gallery_model = Rc::clone(gallery_model);
         let gallery_tx = gallery_tx.clone();
@@ -609,13 +638,18 @@ fn wire_image_viewer(
             let Some(app) = app_weak.upgrade() else {
                 return;
             };
+            let gallery = ui_bridge::GalleryContext {
+                thumbnails: &gallery_model,
+                video_flags: &gallery_video_flags,
+                tx: &gallery_tx,
+            };
             ui_bridge::toggle_gallery(
+                &mpv,
                 &app,
                 &mut state.borrow_mut(),
-                &gallery_model,
-                &gallery_video_flags,
-                &gallery_tx,
+                &gallery,
             );
+            ui_bridge::sync_active_view_ui(&app, &mut state.borrow_mut());
             if !app.get_slideshow_on() {
                 slideshow_timer.stop();
             }
@@ -627,21 +661,41 @@ fn wire_image_viewer(
         let state = Rc::clone(state);
         let model = Rc::clone(model);
         let app_weak = app.as_weak();
+        let sprite_timer = Rc::clone(sprite_timer);
+        let sprite_tx = sprite_tx.clone();
         app.on_gallery_item_clicked(move |pos| {
             let Some(app) = app_weak.upgrade() else {
                 return;
             };
-            let mut state = state.borrow_mut();
-            if let Some(&queue_idx) = state.gallery_order.get(pos as usize) {
+            let (schedule_sprites, queue_idx) = {
+                let mut state = state.borrow_mut();
+                let Some(&queue_idx) = state.gallery_order.get(pos as usize) else {
+                    return;
+                };
                 match state.mode {
                     ui_bridge::Mode::Image => {
                         ui_bridge::show_image_at(&app, &mut state, &model, queue_idx);
+                        (false, queue_idx)
                     }
                     ui_bridge::Mode::All => {
                         ui_bridge::present_item(&mpv, &app, &mut state, &model, queue_idx);
+                        (state.all_current_is_video, queue_idx)
                     }
-                    ui_bridge::Mode::Video => {}
+                    ui_bridge::Mode::Video => {
+                        ui_bridge::play_index(&mpv, &app, &mut state, &model, queue_idx);
+                        (true, queue_idx)
+                    }
                 }
+            };
+            if schedule_sprites {
+                ui_bridge::schedule_sprite_generation(
+                    app_weak.clone(),
+                    &state,
+                    &model,
+                    &sprite_timer,
+                    sprite_tx.clone(),
+                    queue_idx,
+                );
             }
         });
     }
@@ -996,9 +1050,9 @@ fn main() {
     app.set_gallery_thumbnails(slint::ModelRc::from(gallery_model.clone()));
     let gallery_video_flags: Rc<VecModel<bool>> = Rc::new(VecModel::default());
     app.set_gallery_is_video(slint::ModelRc::from(gallery_video_flags.clone()));
-    app.set_view_mode(0);
+    app.set_view_mode(2);
 
-    // Debounced thumbnail-sprite generation, triggered whenever the played
+    // Debounced thumbnail-sprite generation, triggered when the user selects
     // item changes (item click, prev/next, initial autoplay). Background
     // generation results come back over this channel and get drained by the
     // same timer that drains folder-scan batches, below.
@@ -1027,10 +1081,11 @@ fn main() {
         &state,
         &model,
         ImportWiring {
-            sprite_timer: Rc::clone(&sprite_timer),
-            sprite_tx: sprite_tx.clone(),
             scan_tx: scan_tx.clone(),
             startup_paths: Rc::clone(&startup_paths),
+            gallery_model: Rc::clone(&gallery_model),
+            gallery_video_flags: Rc::clone(&gallery_video_flags),
+            gallery_tx: gallery_tx.clone(),
         },
     );
     wire_playback_controls(&app, &mpv, &state);
@@ -1039,9 +1094,10 @@ fn main() {
         &mpv,
         &state,
         &model,
-        &sprite_timer,
-        &sprite_tx,
         &scan_tx,
+        &gallery_model,
+        &gallery_video_flags,
+        &gallery_tx,
     );
     // Centralize the slideshow timer so mode switches can stop it reliably.
     let slideshow_timer = Rc::new(slint::Timer::default());
@@ -1055,6 +1111,8 @@ fn main() {
         &gallery_video_flags,
         &gallery_tx,
         &slideshow_timer,
+        &sprite_timer,
+        &sprite_tx,
     );
 
     // Folder scanning runs on a background thread (recursive walk + magic-byte
@@ -1075,6 +1133,9 @@ fn main() {
         let sprite_timer = Rc::clone(&sprite_timer);
         let sprite_tx = sprite_tx.clone();
         let scan_tx = scan_tx.clone();
+        let gallery_model = Rc::clone(&gallery_model);
+        let gallery_video_flags = Rc::clone(&gallery_video_flags);
+        let gallery_tx = gallery_tx.clone();
         let drain_timer = slint::Timer::default();
         drain_timer.start(
             slint::TimerMode::Repeated,
@@ -1098,10 +1159,12 @@ fn main() {
                             mpv: &mpv,
                             state: &state,
                             model: &model,
-                            app_weak: &app_weak,
-                            sprite_timer: &sprite_timer,
-                            sprite_tx: &sprite_tx,
                             scan_tx: &scan_tx,
+                            gallery: ui_bridge::GalleryContext {
+                                thumbnails: &gallery_model,
+                                video_flags: &gallery_video_flags,
+                                tx: &gallery_tx,
+                            },
                         },
                     );
                 }
@@ -1130,23 +1193,18 @@ fn main() {
                         })
                         .collect();
                     drop(state_ref);
-                    let played = ui_bridge::enqueue_paths(
+                    ui_bridge::enqueue_paths(
                         &mpv,
                         &app,
                         &mut state.borrow_mut(),
                         &model,
                         named,
+                        &ui_bridge::GalleryContext {
+                            thumbnails: &gallery_model,
+                            video_flags: &gallery_video_flags,
+                            tx: &gallery_tx,
+                        },
                     );
-                    if let Some(idx) = played {
-                        ui_bridge::schedule_sprite_generation(
-                            app_weak.clone(),
-                            &state,
-                            &model,
-                            &sprite_timer,
-                            sprite_tx.clone(),
-                            idx,
-                        );
-                    }
                 }
                 while let Ok((hash, ok)) = sprite_rx.try_recv() {
                     ui_bridge::apply_sprite_result(&app, &mut state.borrow_mut(), &model, hash, ok);

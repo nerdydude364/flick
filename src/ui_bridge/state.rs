@@ -82,7 +82,7 @@ impl AppState {
             queue: Queue::new(),
             image_queue: Queue::new(),
             all_queue: Queue::new(),
-            mode: Mode::Video,
+            mode: Mode::All,
             all_current_is_video: false,
             gallery_open: false,
             gallery_order: Vec::new(),

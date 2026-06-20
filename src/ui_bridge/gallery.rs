@@ -1,6 +1,7 @@
 use super::state::{AppState, Mode};
 use crate::AppWindow;
 use crate::library::{MediaKind, media_kind};
+use libmpv2::Mpv;
 use slint::{Model, VecModel};
 use std::path::PathBuf;
 use std::sync::mpsc::Sender;
@@ -9,12 +10,18 @@ const CONCURRENCY: usize = 8;
 
 pub type GalleryThumbResult = (u64, usize, String);
 
+/// Thumbnail models + channel used to populate the shared gallery grid.
+pub struct GalleryContext<'a> {
+    pub thumbnails: &'a VecModel<slint::Image>,
+    pub video_flags: &'a VecModel<bool>,
+    pub tx: &'a Sender<GalleryThumbResult>,
+}
+
 pub fn toggle_gallery(
+    mpv: &Mpv,
     app: &AppWindow,
     state: &mut AppState,
-    gallery_model: &VecModel<slint::Image>,
-    gallery_video_flags: &VecModel<bool>,
-    gallery_tx: &Sender<GalleryThumbResult>,
+    gallery: &GalleryContext<'_>,
 ) {
     state.gallery_open = !state.gallery_open;
     if !state.gallery_open {
@@ -25,56 +32,111 @@ pub fn toggle_gallery(
                 timer.stop();
             }
         }
-        open_gallery(state, gallery_model, gallery_video_flags, gallery_tx);
+        if state.mode == Mode::Video
+            || (state.mode == Mode::All && state.all_current_is_video)
+        {
+            if super::log_mpv_err("pause-for-gallery-grid", mpv.set_property("pause", true)) {
+                app.set_playing(false);
+            }
+        }
+        load_gallery_thumbnails(state, gallery);
     }
     app.set_gallery_open(state.gallery_open);
 }
 
-fn open_gallery(
+/// Show the thumbnail grid (no single-item view). Used after import and when
+/// switching modes with nothing selected yet.
+pub fn open_gallery_grid(
+    mpv: &Mpv,
+    app: &AppWindow,
     state: &mut AppState,
-    gallery_model: &VecModel<slint::Image>,
-    gallery_video_flags: &VecModel<bool>,
-    gallery_tx: &Sender<GalleryThumbResult>,
+    gallery: &GalleryContext<'_>,
 ) {
-    state.gallery_generation += 1;
-    let generation = state.gallery_generation;
+    state.gallery_open = false;
+    if state.slideshow_on && (state.mode == Mode::Image || state.mode == Mode::All) {
+        state.slideshow_on = false;
+        app.set_slideshow_on(false);
+        if let Some(timer) = &state.slideshow_timer {
+            timer.stop();
+        }
+    }
+    if state.mode == Mode::Video
+        || (state.mode == Mode::All && state.all_current_is_video)
+    {
+        let _ = mpv.command("stop", &[]);
+        app.set_playing(false);
+    }
+    load_gallery_thumbnails(state, gallery);
+    app.set_gallery_open(false);
+}
 
-    let (order, paths): (Vec<usize>, Vec<PathBuf>) = match state.mode {
+fn gallery_source(state: &AppState) -> Option<(Vec<usize>, Vec<PathBuf>, Vec<bool>)> {
+    let (order, paths, is_video): (Vec<usize>, Vec<PathBuf>, Vec<bool>) = match state.mode {
+        Mode::Video => {
+            let order = state
+                .queue
+                .current_order(&state.search_query, state.shuffle_on);
+            let paths: Vec<PathBuf> = order
+                .iter()
+                .filter_map(|&i| state.queue.item(i))
+                .map(|item| item.path.clone())
+                .collect();
+            let is_video = vec![true; paths.len()];
+            (order, paths, is_video)
+        }
         Mode::Image => {
             let order = state
                 .image_queue
                 .current_order(&state.search_query, state.shuffle_on);
-            let paths = order
+            let paths: Vec<PathBuf> = order
                 .iter()
                 .filter_map(|&i| state.image_queue.item(i))
                 .map(|item| item.path.clone())
                 .collect();
-            (order, paths)
+            let is_video = vec![false; paths.len()];
+            (order, paths, is_video)
         }
         Mode::All => {
             let order = state
                 .all_queue
                 .current_order(&state.search_query, state.shuffle_on);
-            let paths = order
+            let paths: Vec<PathBuf> = order
                 .iter()
                 .filter_map(|&i| state.all_queue.item(i))
                 .map(|item| item.path.clone())
                 .collect();
-            (order, paths)
+            let is_video: Vec<bool> = paths
+                .iter()
+                .map(|p| media_kind(p) == MediaKind::Video)
+                .collect();
+            (order, paths, is_video)
         }
-        Mode::Video => return,
+    };
+    if paths.is_empty() {
+        None
+    } else {
+        Some((order, paths, is_video))
+    }
+}
+
+fn load_gallery_thumbnails(state: &mut AppState, gallery: &GalleryContext<'_>) {
+    let Some((order, paths, is_video)) = gallery_source(state) else {
+        state.gallery_order.clear();
+        gallery.thumbnails.set_vec(Vec::new());
+        gallery.video_flags.set_vec(Vec::new());
+        return;
     };
 
+    state.gallery_generation += 1;
+    let generation = state.gallery_generation;
     state.gallery_order = order;
-    let is_video: Vec<bool> = paths
-        .iter()
-        .map(|p| media_kind(p) == MediaKind::Video)
-        .collect();
 
-    gallery_model.set_vec(vec![slint::Image::default(); paths.len()]);
-    gallery_video_flags.set_vec(is_video.clone());
+    gallery
+        .thumbnails
+        .set_vec(vec![slint::Image::default(); paths.len()]);
+    gallery.video_flags.set_vec(is_video.clone());
 
-    let tx = gallery_tx.clone();
+    let tx = gallery.tx.clone();
     std::thread::spawn(move || {
         for batch_start in (0..paths.len()).step_by(CONCURRENCY) {
             let batch_end = (batch_start + CONCURRENCY).min(paths.len());

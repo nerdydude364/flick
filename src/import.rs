@@ -52,10 +52,8 @@ pub struct ImportContext<'a> {
     pub mpv: &'a Rc<Mpv>,
     pub state: &'a Rc<RefCell<AppState>>,
     pub model: &'a Rc<VecModel<crate::PlaylistItemData>>,
-    pub app_weak: &'a slint::Weak<AppWindow>,
-    pub sprite_timer: &'a Rc<slint::Timer>,
-    pub sprite_tx: &'a std::sync::mpsc::Sender<(String, bool)>,
     pub scan_tx: &'a std::sync::mpsc::Sender<Vec<library::ScannedFile>>,
+    pub gallery: ui_bridge::GalleryContext<'a>,
 }
 
 /// Loads media files into the queue and kicks off background folder scans —
@@ -68,23 +66,14 @@ pub fn import_paths(paths: Vec<PathBuf>, ctx: &ImportContext<'_>) {
     if !files.is_empty() {
         let named = named_media_entries(files);
         if !named.is_empty() {
-            let played = ui_bridge::enqueue_paths(
+            ui_bridge::enqueue_paths(
                 ctx.mpv,
                 ctx.app,
                 &mut ctx.state.borrow_mut(),
                 ctx.model,
                 named,
+                &ctx.gallery,
             );
-            if let Some(idx) = played {
-                ui_bridge::schedule_sprite_generation(
-                    ctx.app_weak.clone(),
-                    ctx.state,
-                    ctx.model,
-                    ctx.sprite_timer,
-                    ctx.sprite_tx.clone(),
-                    idx,
-                );
-            }
         }
     }
     scan_folders(folders, ctx.scan_tx);
