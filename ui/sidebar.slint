@@ -75,6 +75,11 @@ export component Sidebar inherits Rectangle {
                 letter-spacing: 1.2px;
                 vertical-alignment: center;
             }
+            if library-loading: HorizontalLayout {
+                spacing: Theme.gap-xs;
+                LoadingSpinner { running: library-loading; }
+            }
+
             Rectangle { horizontal-stretch: 1; }
             IconButton {
                 size: 32px;
@@ -141,19 +146,6 @@ export component Sidebar inherits Rectangle {
                         font-size: 13px;
                     }
                 }
-            }
-        }
-
-        if library-loading: HorizontalLayout {
-            spacing: Theme.gap-xs;
-            LoadingSpinner { running: library-loading; }
-            Text {
-                text: library-loading-message;
-                color: Theme.muted;
-                font-size: 12px;
-                vertical-alignment: center;
-                overflow: elide;
-                horizontal-stretch: 1;
             }
         }
 
