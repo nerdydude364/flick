@@ -288,6 +288,21 @@ export component AppWindow inherits Window {
 
                 Rectangle {
                     height: 26px;
+                    min-width: all-label.preferred-width + 28px;
+                    border-radius: self.height / 2;
+                    background: view-mode == 2 ? Theme.accent-soft : transparent;
+
+                    all-label := Text {
+                        text: "All";
+                        font-size: 13px;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                        color: view-mode == 2 ? Theme.accent : Theme.muted;
+                    }
+                    TouchArea { clicked => { if (view-mode != 2) { set-view-mode(2); } key-handler.focus(); } }
+                }
+                Rectangle {
+                    height: 26px;
                     min-width: video-label.preferred-width + 28px;
                     border-radius: self.height / 2;
                     background: view-mode == 0 ? Theme.accent-soft : transparent;
@@ -315,21 +330,6 @@ export component AppWindow inherits Window {
                         color: view-mode == 1 ? Theme.accent : Theme.muted;
                     }
                     TouchArea { clicked => { if (view-mode != 1) { set-view-mode(1); } key-handler.focus(); } }
-                }
-                Rectangle {
-                    height: 26px;
-                    min-width: all-label.preferred-width + 28px;
-                    border-radius: self.height / 2;
-                    background: view-mode == 2 ? Theme.accent-soft : transparent;
-
-                    all-label := Text {
-                        text: "All";
-                        font-size: 13px;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
-                        color: view-mode == 2 ? Theme.accent : Theme.muted;
-                    }
-                    TouchArea { clicked => { if (view-mode != 2) { set-view-mode(2); } key-handler.focus(); } }
                 }
             }
         }

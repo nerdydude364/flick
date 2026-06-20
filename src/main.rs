@@ -144,7 +144,7 @@ fn start_slideshow_timer(
             }
             let advanced = match state_ref.mode {
                 ui_bridge::Mode::Image => {
-                    ui_bridge::navigate_image_relative(&app, &mut state_ref, &model, 1)
+                    ui_bridge::navigate_image_relative(&mpv, &app, &mut state_ref, &model, 1)
                 }
                 ui_bridge::Mode::All => {
                     if !ui_bridge::all_slideshow_wants_timer(&state_ref) {
@@ -306,11 +306,15 @@ fn wire_video_underlay(
 fn wire_playback_controls(app: &AppWindow, mpv: &Rc<Mpv>, state: &Rc<RefCell<AppState>>) {
     {
         let mpv = Rc::clone(mpv);
+        let state = Rc::clone(state);
         let app_weak = app.as_weak();
         app.on_toggle_play(move || {
             let Some(app) = app_weak.upgrade() else {
                 return;
             };
+            if state.borrow().mode == ui_bridge::Mode::Image {
+                return;
+            }
             let now_playing = !app.get_playing();
             if !ui_bridge::log_mpv_err("toggle play", mpv.set_property("pause", !now_playing)) {
                 return;
@@ -649,7 +653,7 @@ fn wire_image_viewer(
             let mut state = state.borrow_mut();
             match state.mode {
                 ui_bridge::Mode::Image => {
-                    ui_bridge::navigate_image_relative(&app, &mut state, &model, delta);
+                    ui_bridge::navigate_image_relative(&mpv, &app, &mut state, &model, delta);
                 }
                 ui_bridge::Mode::All => {
                     ui_bridge::navigate_all_relative(&mpv, &app, &mut state, &model, delta);
@@ -722,7 +726,7 @@ fn wire_image_viewer(
                 };
                 match state.mode {
                     ui_bridge::Mode::Image => {
-                        ui_bridge::show_image_at(&app, &mut state, &model, queue_idx);
+                        ui_bridge::show_image_at(&mpv, &app, &mut state, &model, queue_idx);
                         (false, queue_idx)
                     }
                     ui_bridge::Mode::All => {
@@ -880,7 +884,7 @@ fn wire_playlist_navigation(
                     );
                 }
                 ui_bridge::Mode::Image => {
-                    ui_bridge::show_image_at(&app, &mut state.borrow_mut(), &model, index);
+                    ui_bridge::show_image_at(&mpv, &app, &mut state.borrow_mut(), &model, index);
                 }
                 ui_bridge::Mode::All => {
                     let is_video = {

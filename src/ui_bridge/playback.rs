@@ -19,6 +19,13 @@ fn sync_mode_ui(app: &AppWindow, state: &AppState) {
     });
 }
 
+/// Image mode never drives mpv — stop decoding/audio so a prior video session
+/// cannot continue underneath the image viewer.
+pub fn stop_mpv_for_image_mode(mpv: &Mpv, app: &AppWindow) {
+    log_mpv_err("stop-for-image-mode", mpv.command("stop", &[]));
+    app.set_playing(false);
+}
+
 /// Loads `index` from the video queue: updates state, issues the mpv loadfile
 /// command, and syncs the UI.
 pub fn play_index(
@@ -121,14 +128,19 @@ pub fn present_item(
 
 /// Shows `index` from the image queue in the gallery view — image-mode only.
 pub fn show_image_at(
+    mpv: &Mpv,
     app: &AppWindow,
     state: &mut AppState,
     model: &VecModel<PlaylistItemData>,
     index: usize,
 ) {
+    if state.mode != Mode::Image {
+        return;
+    }
     if state.image_queue.item(index).is_none() {
         return;
     }
+    stop_mpv_for_image_mode(mpv, app);
     state.image_queue.set_now_playing(Some(index));
     state.gallery_open = true;
     reset_image_view_transform(app);
@@ -137,6 +149,7 @@ pub fn show_image_at(
 }
 
 pub fn navigate_image_relative(
+    mpv: &Mpv,
     app: &AppWindow,
     state: &mut AppState,
     model: &VecModel<PlaylistItemData>,
@@ -152,7 +165,7 @@ pub fn navigate_image_relative(
             .playable_next(&state.search_query, state.shuffle_on, state.loop_on)
     };
     if let Some(idx) = next {
-        show_image_at(app, state, model, idx);
+        show_image_at(mpv, app, state, model, idx);
         true
     } else {
         false
@@ -261,7 +274,7 @@ pub fn toggle_slideshow(
     match state.mode {
         Mode::Image => {
             if state.image_queue.now_playing().is_none() && !state.image_queue.is_empty() {
-                show_image_at(app, state, model, 0);
+                show_image_at(mpv, app, state, model, 0);
             }
         }
         Mode::All => {
@@ -472,7 +485,11 @@ pub fn set_mode(
         return;
     }
     let leaving_video = state.mode == Mode::Video && mode != Mode::Video;
-    if leaving_video && log_mpv_err("auto-pause on mode switch", mpv.set_property("pause", true)) {
+    if mode == Mode::Image {
+        stop_mpv_for_image_mode(mpv, app);
+    } else if leaving_video
+        && log_mpv_err("auto-pause on mode switch", mpv.set_property("pause", true))
+    {
         app.set_playing(false);
     }
     if mode == Mode::Video {
@@ -504,7 +521,7 @@ fn enter_mode_view(
     match mode {
         Mode::Image => {
             if let Some(idx) = state.image_queue.now_playing() {
-                show_image_at(app, state, model, idx);
+                show_image_at(mpv, app, state, model, idx);
             } else if !state.image_queue.is_empty() {
                 show_gallery_grid(mpv, app, state, gallery);
                 sync_image_viewer_ui(app, state);
@@ -577,7 +594,7 @@ pub fn remove_item(
                 rebuild_playlist_model(state, model);
             }
             RemoveOutcome::NowPlayingChanged(new_index) => {
-                show_image_at(app, state, model, new_index)
+                show_image_at(mpv, app, state, model, new_index)
             }
             RemoveOutcome::NoPlaybackChange => {
                 sync_image_viewer_ui(app, state);

@@ -98,6 +98,9 @@ fn prepare_gallery_view(mpv: &Mpv, app: &AppWindow, state: &mut AppState) {
     if state.mode == Mode::Video || (state.mode == Mode::All && state.all_current_is_video) {
         let _ = mpv.command("stop", &[]);
         app.set_playing(false);
+    } else if state.mode == Mode::Image {
+        let _ = mpv.command("stop", &[]);
+        app.set_playing(false);
     }
     app.set_gallery_open(false);
 }
