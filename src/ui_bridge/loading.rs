@@ -1,7 +1,7 @@
 use super::state::{AppState, Mode, SpriteStatus};
 use crate::AppWindow;
-use crate::library::{MediaKind, media_kind};
 use crate::PlaylistItemData;
+use crate::library::{MediaKind, media_kind};
 use slint::{Model, VecModel};
 
 /// Below this row count the sidebar model is rebuilt in one shot.
@@ -44,8 +44,7 @@ pub fn sync_loading_ui(app: &AppWindow, state: &AppState) {
     } else if gallery_busy {
         format!(
             "Loading thumbnails… {}/{}",
-            state.gallery_thumbs_loaded,
-            state.gallery_thumbs_pending
+            state.gallery_thumbs_loaded, state.gallery_thumbs_pending
         )
     } else if state.library_loading {
         state.library_loading_message.clone()
@@ -97,7 +96,10 @@ fn build_playlist_row(
     } else {
         ""
     };
-    let size_text = item.size_bytes.map(super::format_file_size).unwrap_or_default();
+    let size_text = item
+        .size_bytes
+        .map(super::format_file_size)
+        .unwrap_or_default();
     PlaylistItemData {
         queue_index: queue_index as i32,
         name: item.name.into(),
@@ -137,7 +139,11 @@ pub fn schedule_playlist_rebuild(state: &mut AppState, model: &VecModel<Playlist
 }
 
 /// Advances an in-progress sidebar rebuild. Returns `true` when idle.
-pub fn tick_playlist_rebuild(app: &AppWindow, state: &mut AppState, model: &VecModel<PlaylistItemData>) {
+pub fn tick_playlist_rebuild(
+    app: &AppWindow,
+    state: &mut AppState,
+    model: &VecModel<PlaylistItemData>,
+) {
     let job_snapshot = state.pending_playlist_rebuild.as_ref().map(|job| {
         (
             job.next_index,

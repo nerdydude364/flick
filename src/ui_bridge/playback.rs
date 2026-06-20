@@ -1,9 +1,9 @@
 use super::gallery::GalleryContext;
 use super::gif::decode_gif;
+use super::loading::{rebuild_playlist_model, set_library_loading, sync_loading_ui};
+use super::log_mpv_err;
 use super::sprite_preview::{clear_sprite_preview, hide_list_sprite_preview, sync_sprite_preview};
 use super::state::{AppState, Mode};
-use super::loading::{rebuild_playlist_model, set_library_loading, sync_loading_ui};
-use super::{log_mpv_err};
 use crate::library::{MediaKind, media_kind};
 use crate::playlist::RemoveOutcome;
 use crate::{AppWindow, PlaylistItemData};
@@ -222,11 +222,11 @@ pub fn advance_on_video_eof(
 ) -> VideoEofAdvance {
     match state.mode {
         Mode::Video => {
-            let Some(idx) = state.queue.playable_next(
-                &state.search_query,
-                state.shuffle_on,
-                state.loop_on,
-            ) else {
+            let Some(idx) =
+                state
+                    .queue
+                    .playable_next(&state.search_query, state.shuffle_on, state.loop_on)
+            else {
                 return VideoEofAdvance {
                     video_index: None,
                     restart_slideshow_timer: false,
@@ -247,7 +247,9 @@ pub fn advance_on_video_eof(
                 } else {
                     None
                 },
-                restart_slideshow_timer: advanced && slideshow_on && all_slideshow_wants_timer(state),
+                restart_slideshow_timer: advanced
+                    && slideshow_on
+                    && all_slideshow_wants_timer(state),
             }
         }
         _ => VideoEofAdvance {
@@ -431,7 +433,13 @@ fn finish_import_gallery(
     if state.all_queue.is_empty() {
         return;
     }
-    super::gallery::open_gallery_grid(mpv, app, state, gallery, super::gallery::GalleryReload::Force);
+    super::gallery::open_gallery_grid(
+        mpv,
+        app,
+        state,
+        gallery,
+        super::gallery::GalleryReload::Force,
+    );
     sync_active_view_ui(app, state);
     super::loading::schedule_playlist_rebuild(state, model);
     sync_loading_ui(app, state);
@@ -559,7 +567,13 @@ fn show_gallery_grid(
     gallery: Option<&GalleryContext<'_>>,
 ) {
     if let Some(gallery) = gallery {
-        super::gallery::open_gallery_grid(mpv, app, state, gallery, super::gallery::GalleryReload::Force);
+        super::gallery::open_gallery_grid(
+            mpv,
+            app,
+            state,
+            gallery,
+            super::gallery::GalleryReload::Force,
+        );
     } else {
         state.gallery_open = false;
         app.set_gallery_open(false);

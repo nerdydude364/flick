@@ -8,8 +8,8 @@ mod state;
 
 pub use ab_loop::{handle_progress_click, toggle_ab_loop};
 pub use gallery::{
-    apply_gallery_thumb, run_pending_gallery_reload, toggle_gallery, GalleryContext,
-    GalleryThumbResult,
+    GalleryContext, GalleryThumbResult, apply_gallery_thumb, run_pending_gallery_reload,
+    toggle_gallery,
 };
 pub use gif::tick_gif_animation;
 pub use loading::{

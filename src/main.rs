@@ -240,28 +240,28 @@ fn wire_video_underlay(
                 // render context attached yet, fails ("No render context set"),
                 // and falls back to audio-only with no retry. This was the
                 // actual cause of an earlier "black video, audio plays fine" bug.
-                    if let Some(app) = app_weak.upgrade() {
-                        let paths = std::mem::take(&mut *startup_paths.borrow_mut());
-                        if !paths.is_empty() {
-                            let gallery = ui_bridge::GalleryContext {
-                                thumbnails: &gallery_model,
-                                video_flags: &gallery_video_flags,
-                                tx: &gallery_tx,
-                            };
-                            import::import_paths(
-                                paths,
-                                &import::ImportContext {
-                                    app: &app,
-                                    mpv: &mpv,
-                                    state: &state,
-                                    model: &model,
-                                    scan_tx: &scan_tx,
-                                    file_import_tx: &file_import_tx,
-                                    gallery,
-                                },
-                            );
-                        }
+                if let Some(app) = app_weak.upgrade() {
+                    let paths = std::mem::take(&mut *startup_paths.borrow_mut());
+                    if !paths.is_empty() {
+                        let gallery = ui_bridge::GalleryContext {
+                            thumbnails: &gallery_model,
+                            video_flags: &gallery_video_flags,
+                            tx: &gallery_tx,
+                        };
+                        import::import_paths(
+                            paths,
+                            &import::ImportContext {
+                                app: &app,
+                                mpv: &mpv,
+                                state: &state,
+                                model: &model,
+                                scan_tx: &scan_tx,
+                                file_import_tx: &file_import_tx,
+                                gallery,
+                            },
+                        );
                     }
+                }
             }
             slint::RenderingState::BeforeRendering => {
                 if let (Some(underlay), Some(app)) = (underlay.as_ref(), app_weak.upgrade()) {
@@ -688,12 +688,7 @@ fn wire_image_viewer(
                 video_flags: &gallery_video_flags,
                 tx: &gallery_tx,
             };
-            ui_bridge::toggle_gallery(
-                &mpv,
-                &app,
-                &mut state.borrow_mut(),
-                &gallery,
-            );
+            ui_bridge::toggle_gallery(&mpv, &app, &mut state.borrow_mut(), &gallery);
             ui_bridge::sync_active_view_ui(&app, &mut state.borrow_mut());
             schedule_pending_gallery_reload(
                 app_weak.clone(),
@@ -1125,8 +1120,7 @@ fn main() {
     ));
 
     let (scan_tx, scan_rx) = std::sync::mpsc::channel::<Vec<library::ScannedFile>>();
-    let (file_import_tx, file_import_rx) =
-        std::sync::mpsc::channel::<import::FileImportBatch>();
+    let (file_import_tx, file_import_rx) = std::sync::mpsc::channel::<import::FileImportBatch>();
     let (drop_tx, drop_rx) = std::sync::mpsc::channel::<PathBuf>();
 
     wire_video_underlay(
@@ -1301,11 +1295,7 @@ fn main() {
                         gallery_tx.clone(),
                     );
                 }
-                ui_bridge::tick_playlist_rebuild(
-                    &app,
-                    &mut state.borrow_mut(),
-                    &model,
-                );
+                ui_bridge::tick_playlist_rebuild(&app, &mut state.borrow_mut(), &model);
                 while let Ok((hash, ok)) = sprite_rx.try_recv() {
                     ui_bridge::apply_sprite_result(&app, &mut state.borrow_mut(), &model, hash, ok);
                 }

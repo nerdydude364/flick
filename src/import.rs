@@ -77,10 +77,7 @@ pub fn import_paths(paths: Vec<PathBuf>, ctx: &ImportContext<'_>) {
     scan_folders(folders, ctx.scan_tx);
 }
 
-pub fn apply_file_import_batch(
-    batch: FileImportBatch,
-    ctx: &ImportContext<'_>,
-) {
+pub fn apply_file_import_batch(batch: FileImportBatch, ctx: &ImportContext<'_>) {
     if batch.is_empty() {
         let mut state = ctx.state.borrow_mut();
         state.library_loading = false;
