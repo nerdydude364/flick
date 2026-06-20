@@ -89,9 +89,18 @@ export component AppWindow inherits Window {
     property <string> counter-text: all-mode ? media-counter-text : (video-mode ? video-counter-text : image-counter-text);
     property <int> counter-position: all-mode ? media-position : (video-mode ? video-position : image-position);
     property <int> counter-total: all-mode ? media-total : (video-mode ? video-total : image-total);
-    property <bool> slideshow-transport: image-mode || all-mode;
-    property <bool> show-video-scrub: (video-mode && gallery-open) || (all-mode && current-is-video && gallery-open && !slideshow-on);
     property <bool> has-library-items: all-mode ? has-media : (video-mode ? has-videos : has-images);
+    // Single-item view with mpv playback (video mode, or a video in All mode).
+    property <bool> show-video-transport: (video-mode && gallery-open) || (all-mode && current-is-video && gallery-open);
+    // Single-item image view (image mode, or an image in All mode).
+    property <bool> show-image-transport: (image-mode && gallery-open) || (all-mode && !current-is-video && gallery-open);
+    property <bool> show-video-tools: show-video-transport;
+    property <bool> show-image-tools: show-image-transport;
+    // Slideshow prev/play/next — image-only; All-mode videos use mpv transport instead.
+    property <bool> slideshow-transport: show-image-transport;
+    // Prev/next walks the active mode's queue (All uses navigate-image → Rust all_queue).
+    property <bool> queue-navigate-transport: all-mode && gallery-open;
+    property <bool> show-video-scrub: show-video-transport && !slideshow-on;
     // Thumbnail grid (gallery-open=false with items loaded) — chrome is hidden so
     // the grid fills the window; single-item view keeps the normal layout.
     property <bool> gallery-grid-view: !gallery-open && has-library-items;
@@ -383,7 +392,7 @@ export component AppWindow inherits Window {
                 }
             }
 
-            if (image-mode || all-mode) && !show-video-scrub: HorizontalLayout {
+            if show-image-transport && !show-video-scrub: HorizontalLayout {
                 alignment: center;
                 spacing: 10px;
                 Text {
@@ -429,7 +438,14 @@ export component AppWindow inherits Window {
                 padding-bottom: is-fullscreen ? (transport-h - Theme.control) / 2 : 12px;
                 spacing: 10px;
 
-                if video-mode: HorizontalLayout {
+                // Global control: leave single-item view and return to the grid
+                // for whichever view mode is active.
+                if !gallery-grid-view && gallery-open: IconButton {
+                    icon: @image-url("icons/grid.svg");
+                    clicked => { toggle-gallery(); key-handler.focus(); }
+                }
+
+                if show-video-tools: HorizontalLayout {
                     spacing: 8px;
                     width: 250px;
                     IconButton {
@@ -476,22 +492,8 @@ export component AppWindow inherits Window {
                     }
                 }
 
-                if video-mode || all-mode: HorizontalLayout {
+                if show-image-tools: HorizontalLayout {
                     spacing: 8px;
-                    IconButton {
-                        icon: @image-url("icons/grid.svg");
-                        active: !gallery-open;
-                        clicked => { toggle-gallery(); key-handler.focus(); }
-                    }
-                }
-
-                if image-mode: HorizontalLayout {
-                    spacing: 8px;
-                    IconButton {
-                        icon: @image-url("icons/grid.svg");
-                        active: !gallery-open;
-                        clicked => { toggle-gallery(); key-handler.focus(); }
-                    }
                     IconButton {
                         icon: @image-url("icons/zoom-out.svg");
                         clicked => {
@@ -538,7 +540,7 @@ export component AppWindow inherits Window {
                             icon-size: 18px;
                             icon: @image-url("icons/prev.svg");
                             clicked => {
-                                if (slideshow-transport) { navigate-image(-1); }
+                                if (slideshow-transport || queue-navigate-transport) { navigate-image(-1); }
                                 else { previous-track(); }
                                 key-handler.focus();
                             }
@@ -560,7 +562,7 @@ export component AppWindow inherits Window {
                             icon-size: 18px;
                             icon: @image-url("icons/next.svg");
                             clicked => {
-                                if (slideshow-transport) { navigate-image(1); }
+                                if (slideshow-transport || queue-navigate-transport) { navigate-image(1); }
                                 else { next-track(); }
                                 key-handler.focus();
                             }
@@ -656,10 +658,10 @@ export component AppWindow inherits Window {
                     if (slideshow-transport) { toggle-slideshow(); } else { toggle-play(); }
                     accept
                 } else if (event.text == Key.LeftArrow || event.text == "[") {
-                    if (slideshow-transport) { navigate-image(-1); } else { previous-track(); }
+                    if (slideshow-transport || queue-navigate-transport) { navigate-image(-1); } else { previous-track(); }
                     accept
                 } else if (event.text == Key.RightArrow || event.text == "]") {
-                    if (slideshow-transport) { navigate-image(1); } else { next-track(); }
+                    if (slideshow-transport || queue-navigate-transport) { navigate-image(1); } else { next-track(); }
                     accept
                 } else if (event.modifiers.control && event.text == "f") {
                     toggle-fullscreen();

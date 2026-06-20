@@ -17,31 +17,26 @@ pub struct GalleryContext<'a> {
     pub tx: &'a Sender<GalleryThumbResult>,
 }
 
+pub fn return_to_gallery(
+    mpv: &Mpv,
+    app: &AppWindow,
+    state: &mut AppState,
+    gallery: &GalleryContext<'_>,
+) {
+    if !state.gallery_open {
+        return;
+    }
+    open_gallery_grid(mpv, app, state, gallery);
+}
+
+/// Back-compat alias — the UI only invokes this to leave single-item view.
 pub fn toggle_gallery(
     mpv: &Mpv,
     app: &AppWindow,
     state: &mut AppState,
     gallery: &GalleryContext<'_>,
 ) {
-    state.gallery_open = !state.gallery_open;
-    if !state.gallery_open {
-        if state.mode == Mode::Image || state.mode == Mode::All {
-            state.slideshow_on = false;
-            app.set_slideshow_on(false);
-            if let Some(timer) = &state.slideshow_timer {
-                timer.stop();
-            }
-        }
-        if state.mode == Mode::Video
-            || (state.mode == Mode::All && state.all_current_is_video)
-        {
-            if super::log_mpv_err("pause-for-gallery-grid", mpv.set_property("pause", true)) {
-                app.set_playing(false);
-            }
-        }
-        load_gallery_thumbnails(state, gallery);
-    }
-    app.set_gallery_open(state.gallery_open);
+    return_to_gallery(mpv, app, state, gallery);
 }
 
 /// Show the thumbnail grid (no single-item view). Used after import and when

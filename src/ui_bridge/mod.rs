@@ -6,7 +6,7 @@ mod sprite_preview;
 mod state;
 
 pub use ab_loop::{handle_progress_click, toggle_ab_loop};
-pub use gallery::{GalleryContext, GalleryThumbResult, apply_gallery_thumb, toggle_gallery};
+pub use gallery::{apply_gallery_thumb, toggle_gallery, GalleryContext, GalleryThumbResult};
 pub use gif::tick_gif_animation;
 pub use playback::{
     advance_on_video_eof, all_slideshow_wants_timer, enqueue_paths, navigate_all_relative,
