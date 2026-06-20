@@ -80,6 +80,9 @@ export component AppWindow inherits Window {
     in property <string> slideshow-duration-text: "8s";
     in property <[image]> gallery-thumbnails: [];
     in property <[bool]> gallery-is-video: [];
+    in property <bool> library-loading: false;
+    in property <string> library-loading-message: "";
+    in property <bool> gallery-loading: false;
 
     property <bool> image-mode: view-mode == 1;
     property <bool> all-mode: view-mode == 2;
@@ -101,9 +104,8 @@ export component AppWindow inherits Window {
     // Prev/next walks the active mode's queue (All uses navigate-image → Rust all_queue).
     property <bool> queue-navigate-transport: all-mode && gallery-open;
     property <bool> show-video-scrub: show-video-transport && !slideshow-on;
-    // Thumbnail grid (gallery-open=false with items loaded) — chrome is hidden so
-    // the grid fills the window; single-item view keeps the normal layout.
-    property <bool> gallery-grid-view: !gallery-open && has-library-items;
+    // Thumbnail grid, or loading into it — chrome is hidden so the grid can fill the window.
+    property <bool> gallery-grid-view: !gallery-open && (has-library-items || library-loading);
     property <length> chrome-sidebar-w: gallery-grid-view ? 0px : (sidebar-open ? Theme.sidebar-width : 0px);
     property <length> chrome-bottom-h: gallery-grid-view ? 0px : bottom-h;
 
@@ -218,6 +220,8 @@ export component AppWindow inherits Window {
             rotation-deg: image-rotation-deg;
             gallery-thumbnails: gallery-thumbnails;
             gallery-is-video: gallery-is-video;
+            gallery-loading: gallery-loading;
+            gallery-loading-message: library-loading-message;
             gallery-current-index: counter-position - 1;
             navigate(delta) => { navigate-image(delta); key-handler.focus(); }
             open-images => { open-images(); }
@@ -231,7 +235,9 @@ export component AppWindow inherits Window {
             y: 0;
             width: chrome-sidebar-w;
             height: 100%;
-            opacity: chrome-visible ? 1.0 : 0.0;
+            opacity: (chrome-visible && !gallery-grid-view) ? 1.0 : 0.0;
+            library-loading: library-loading;
+            library-loading-message: library-loading-message;
             items: playlist-items;
             shuffle-on: shuffle-on;
             loop-on: loop-on;

@@ -1,6 +1,7 @@
 import { ListView } from "std-widgets.slint";
 import { Theme } from "theme.slint";
 import { IconButton, ToggleChip, EqBars, SpriteFramePreview } from "components.slint";
+import { LoadingSpinner } from "loading-overlay.slint";
 
 export struct PlaylistItemData {
     queue-index: int,
@@ -17,6 +18,8 @@ export component Sidebar inherits Rectangle {
     in property <bool> loop-on;
     in property <string> search-query: "";
     in property <int> view-mode: 0;
+    in property <bool> library-loading: false;
+    in property <string> library-loading-message: "";
 
     callback open-videos();
     callback open-folder();
@@ -138,6 +141,19 @@ export component Sidebar inherits Rectangle {
                         font-size: 13px;
                     }
                 }
+            }
+        }
+
+        if library-loading: HorizontalLayout {
+            spacing: Theme.gap-xs;
+            LoadingSpinner { running: library-loading; }
+            Text {
+                text: library-loading-message;
+                color: Theme.muted;
+                font-size: 12px;
+                vertical-alignment: center;
+                overflow: elide;
+                horizontal-stretch: 1;
             }
         }
 

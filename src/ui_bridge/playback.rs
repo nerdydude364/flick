@@ -2,7 +2,8 @@ use super::gallery::GalleryContext;
 use super::gif::decode_gif;
 use super::sprite_preview::{clear_sprite_preview, hide_list_sprite_preview, sync_sprite_preview};
 use super::state::{AppState, Mode};
-use super::{log_mpv_err, rebuild_playlist_model};
+use super::loading::{rebuild_playlist_model, set_library_loading, sync_loading_ui};
+use super::{log_mpv_err};
 use crate::library::{MediaKind, media_kind};
 use crate::playlist::RemoveOutcome;
 use crate::{AppWindow, PlaylistItemData};
@@ -419,7 +420,8 @@ fn finish_import_gallery(
     }
     super::gallery::open_gallery_grid(mpv, app, state, gallery);
     sync_active_view_ui(app, state);
-    rebuild_playlist_model(state, model);
+    super::loading::schedule_playlist_rebuild(state, model);
+    sync_loading_ui(app, state);
 }
 
 pub fn enqueue_paths(
@@ -430,6 +432,12 @@ pub fn enqueue_paths(
     named_paths: Vec<(String, PathBuf, Option<u64>)>,
     gallery: &GalleryContext<'_>,
 ) {
+    let count = named_paths.len();
+    if count > 0 {
+        state.library_loading = true;
+        set_library_loading(app, true, &format!("Adding {count} items…"));
+    }
+
     state.all_queue.enqueue(
         named_paths
             .iter()
@@ -447,6 +455,9 @@ pub fn enqueue_paths(
         set_mode(mpv, app, state, model, Mode::All, None);
     }
     finish_import_gallery(mpv, app, state, model, gallery);
+
+    state.library_loading = false;
+    sync_loading_ui(app, state);
 }
 
 pub fn set_mode(

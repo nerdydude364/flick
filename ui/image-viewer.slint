@@ -1,4 +1,5 @@
 import { Theme } from "theme.slint";
+import { LoadingOverlay } from "loading-overlay.slint";
 
 export component ImageViewer inherits Rectangle {
     in property <image> current-image;
@@ -24,6 +25,8 @@ export component ImageViewer inherits Rectangle {
     in property <[bool]> gallery-is-video: [];
     in property <int> gallery-current-index: -1;
     in property <bool> show-single-image: true;
+    in property <bool> gallery-loading: false;
+    in property <string> gallery-loading-message: "";
 
     callback navigate(int);
     callback open-images();
@@ -165,6 +168,15 @@ export component ImageViewer inherits Rectangle {
             TouchArea {
                 clicked => { gallery-item-clicked(i); }
             }
+        }
+
+        if gallery-loading: LoadingOverlay {
+            x: 0;
+            y: 0;
+            width: hit-width;
+            height: hit-height;
+            show: true;
+            message: gallery-loading-message;
         }
     }
 }

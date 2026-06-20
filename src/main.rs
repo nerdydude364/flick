@@ -168,6 +168,7 @@ fn start_slideshow_timer(
 /// why loading a file has to wait until then.
 struct ImportWiring {
     scan_tx: std::sync::mpsc::Sender<Vec<library::ScannedFile>>,
+    file_import_tx: std::sync::mpsc::Sender<import::FileImportBatch>,
     startup_paths: Rc<RefCell<Vec<PathBuf>>>,
     gallery_model: Rc<VecModel<slint::Image>>,
     gallery_video_flags: Rc<VecModel<bool>>,
@@ -188,6 +189,7 @@ fn wire_video_underlay(
     let state = Rc::clone(state);
     let model = Rc::clone(model);
     let scan_tx = import_wiring.scan_tx.clone();
+    let file_import_tx = import_wiring.file_import_tx.clone();
     let startup_paths = Rc::clone(&import_wiring.startup_paths);
     let gallery_model = Rc::clone(&import_wiring.gallery_model);
     let gallery_video_flags = Rc::clone(&import_wiring.gallery_video_flags);
@@ -226,6 +228,7 @@ fn wire_video_underlay(
                                     state: &state,
                                     model: &model,
                                     scan_tx: &scan_tx,
+                                    file_import_tx: &file_import_tx,
                                     gallery,
                                 },
                             );
@@ -429,6 +432,7 @@ fn wire_queue_management(
     state: &Rc<RefCell<AppState>>,
     model: &Rc<VecModel<PlaylistItemData>>,
     scan_tx: &std::sync::mpsc::Sender<Vec<library::ScannedFile>>,
+    file_import_tx: &std::sync::mpsc::Sender<import::FileImportBatch>,
     gallery_model: &Rc<VecModel<slint::Image>>,
     gallery_video_flags: &Rc<VecModel<bool>>,
     gallery_tx: &std::sync::mpsc::Sender<ui_bridge::GalleryThumbResult>,
@@ -477,6 +481,7 @@ fn wire_queue_management(
         let model = Rc::clone(model);
         let app_weak = app.as_weak();
         let scan_tx = scan_tx.clone();
+        let file_import_tx = file_import_tx.clone();
         let gallery_model = Rc::clone(gallery_model);
         let gallery_video_flags = Rc::clone(gallery_video_flags);
         let gallery_tx = gallery_tx.clone();
@@ -495,6 +500,7 @@ fn wire_queue_management(
                     state: &state,
                     model: &model,
                     scan_tx: &scan_tx,
+                    file_import_tx: &file_import_tx,
                     gallery: ui_bridge::GalleryContext {
                         thumbnails: &gallery_model,
                         video_flags: &gallery_video_flags,
@@ -1073,6 +1079,8 @@ fn main() {
     ));
 
     let (scan_tx, scan_rx) = std::sync::mpsc::channel::<Vec<library::ScannedFile>>();
+    let (file_import_tx, file_import_rx) =
+        std::sync::mpsc::channel::<import::FileImportBatch>();
     let (drop_tx, drop_rx) = std::sync::mpsc::channel::<PathBuf>();
 
     wire_video_underlay(
@@ -1082,6 +1090,7 @@ fn main() {
         &model,
         ImportWiring {
             scan_tx: scan_tx.clone(),
+            file_import_tx: file_import_tx.clone(),
             startup_paths: Rc::clone(&startup_paths),
             gallery_model: Rc::clone(&gallery_model),
             gallery_video_flags: Rc::clone(&gallery_video_flags),
@@ -1095,6 +1104,7 @@ fn main() {
         &state,
         &model,
         &scan_tx,
+        &file_import_tx,
         &gallery_model,
         &gallery_video_flags,
         &gallery_tx,
@@ -1133,7 +1143,8 @@ fn main() {
         let sprite_timer = Rc::clone(&sprite_timer);
         let sprite_tx = sprite_tx.clone();
         let scan_tx = scan_tx.clone();
-        let gallery_model = Rc::clone(&gallery_model);
+        let file_import_tx = file_import_tx.clone();
+        let file_import_rx = file_import_rx;
         let gallery_video_flags = Rc::clone(&gallery_video_flags);
         let gallery_tx = gallery_tx.clone();
         let drain_timer = slint::Timer::default();
@@ -1145,7 +1156,30 @@ fn main() {
                     return;
                 };
                 while let Ok(result) = gallery_rx.try_recv() {
-                    ui_bridge::apply_gallery_thumb(&state.borrow(), &gallery_model, result);
+                    ui_bridge::apply_gallery_thumb(
+                        &mut state.borrow_mut(),
+                        &app,
+                        &gallery_model,
+                        result,
+                    );
+                }
+                while let Ok(batch) = file_import_rx.try_recv() {
+                    import::apply_file_import_batch(
+                        batch,
+                        &import::ImportContext {
+                            app: &app,
+                            mpv: &mpv,
+                            state: &state,
+                            model: &model,
+                            scan_tx: &scan_tx,
+                            file_import_tx: &file_import_tx,
+                            gallery: ui_bridge::GalleryContext {
+                                thumbnails: &gallery_model,
+                                video_flags: &gallery_video_flags,
+                                tx: &gallery_tx,
+                            },
+                        },
+                    );
                 }
                 let mut dropped = Vec::new();
                 while let Ok(path) = drop_rx.try_recv() {
@@ -1160,6 +1194,7 @@ fn main() {
                             state: &state,
                             model: &model,
                             scan_tx: &scan_tx,
+                            file_import_tx: &file_import_tx,
                             gallery: ui_bridge::GalleryContext {
                                 thumbnails: &gallery_model,
                                 video_flags: &gallery_video_flags,
@@ -1206,6 +1241,11 @@ fn main() {
                         },
                     );
                 }
+                ui_bridge::tick_playlist_rebuild(
+                    &app,
+                    &mut state.borrow_mut(),
+                    &model,
+                );
                 while let Ok((hash, ok)) = sprite_rx.try_recv() {
                     ui_bridge::apply_sprite_result(&app, &mut state.borrow_mut(), &model, hash, ok);
                 }

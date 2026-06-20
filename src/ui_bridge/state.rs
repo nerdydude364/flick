@@ -74,6 +74,12 @@ pub struct AppState {
     /// hash -> status. `Done` is permanent once observed, matching the
     /// original's `spriteStatusCache` ("only permanent done state is cached").
     pub(crate) sprite_status: HashMap<String, SpriteStatus>,
+    /// Sidebar list being filled incrementally after a large import.
+    pub pending_playlist_rebuild: Option<super::loading::PlaylistRebuildJob>,
+    pub library_loading: bool,
+    pub library_loading_message: String,
+    pub gallery_thumbs_pending: usize,
+    pub gallery_thumbs_loaded: usize,
 }
 
 impl AppState {
@@ -97,6 +103,11 @@ impl AppState {
             gif_animation: None,
             sprite_hash: HashMap::new(),
             sprite_status: HashMap::new(),
+            pending_playlist_rebuild: None,
+            library_loading: false,
+            library_loading_message: String::new(),
+            gallery_thumbs_pending: 0,
+            gallery_thumbs_loaded: 0,
         }
     }
 

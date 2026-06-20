@@ -8,7 +8,7 @@ use std::sync::mpsc::Sender;
 
 const CONCURRENCY: usize = 8;
 
-pub type GalleryThumbResult = (u64, usize, String);
+pub type GalleryThumbResult = (u64, usize, Option<String>);
 
 /// Thumbnail models + channel used to populate the shared gallery grid.
 pub struct GalleryContext<'a> {
@@ -63,6 +63,7 @@ pub fn open_gallery_grid(
     }
     load_gallery_thumbnails(state, gallery);
     app.set_gallery_open(false);
+    super::loading::sync_loading_ui(app, state);
 }
 
 fn gallery_source(state: &AppState) -> Option<(Vec<usize>, Vec<PathBuf>, Vec<bool>)> {
@@ -117,6 +118,8 @@ fn gallery_source(state: &AppState) -> Option<(Vec<usize>, Vec<PathBuf>, Vec<boo
 fn load_gallery_thumbnails(state: &mut AppState, gallery: &GalleryContext<'_>) {
     let Some((order, paths, is_video)) = gallery_source(state) else {
         state.gallery_order.clear();
+        state.gallery_thumbs_pending = 0;
+        state.gallery_thumbs_loaded = 0;
         gallery.thumbnails.set_vec(Vec::new());
         gallery.video_flags.set_vec(Vec::new());
         return;
@@ -125,6 +128,8 @@ fn load_gallery_thumbnails(state: &mut AppState, gallery: &GalleryContext<'_>) {
     state.gallery_generation += 1;
     let generation = state.gallery_generation;
     state.gallery_order = order;
+    state.gallery_thumbs_pending = paths.len();
+    state.gallery_thumbs_loaded = 0;
 
     gallery
         .thumbnails
@@ -146,9 +151,7 @@ fn load_gallery_thumbnails(state: &mut AppState, gallery: &GalleryContext<'_>) {
                         } else {
                             crate::thumbnails::ensure_poster_cached(path)
                         };
-                        if let Some(hash) = hash {
-                            let _ = tx.send((generation, pos, hash));
-                        }
+                        let _ = tx.send((generation, pos, hash));
                     });
                 }
             });
@@ -157,7 +160,8 @@ fn load_gallery_thumbnails(state: &mut AppState, gallery: &GalleryContext<'_>) {
 }
 
 pub fn apply_gallery_thumb(
-    state: &AppState,
+    state: &mut AppState,
+    app: &AppWindow,
     gallery_model: &VecModel<slint::Image>,
     result: GalleryThumbResult,
 ) {
@@ -165,7 +169,13 @@ pub fn apply_gallery_thumb(
     if generation != state.gallery_generation || pos >= gallery_model.row_count() {
         return;
     }
-    if let Some(image) = crate::thumbnails::load_cached_poster(&hash) {
-        gallery_model.set_row_data(pos, image);
+    if let Some(hash) = hash {
+        if let Some(image) = crate::thumbnails::load_cached_poster(&hash) {
+            gallery_model.set_row_data(pos, image);
+        }
     }
+    if state.gallery_thumbs_loaded < state.gallery_thumbs_pending {
+        state.gallery_thumbs_loaded += 1;
+    }
+    super::loading::sync_loading_ui(app, state);
 }
