@@ -14,7 +14,7 @@ rfd = "0.17.2"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
 sha1 = "0.11.0"
-slint = "1.16.1"
+slint = { version = "1.16.1", features = ["unstable-winit-030"] }
 
 [build-dependencies]
 slint-build = "1.16.1"
