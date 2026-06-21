@@ -281,7 +281,7 @@ export component AppWindow inherits Window {
             border-radius: self.height / 2;
             border-width: 1px;
             border-color: Theme.border;
-            opacity: (chrome-visible && !library-loading) ? 1.0 : 0.0;
+            opacity: chrome-visible ? 1.0 : 0.0;
             animate opacity { duration: 200ms; }
 
             seg := HorizontalLayout {
