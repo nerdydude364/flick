@@ -90,6 +90,13 @@ impl Queue {
         added
     }
 
+    /// Appends newly added queue indices to `play_order` so merged imports stay
+    /// visible when shuffle is on (otherwise `current_order` only walks the
+    /// stale prefix and new files never appear in the sidebar or gallery).
+    pub fn extend_play_order(&mut self, added: &[usize]) {
+        self.play_order.extend(added);
+    }
+
     /// Port of `removeVideoAt`/`removeImageAt`. Unlike the original's
     /// `removeVideoAt`, this also fixes up `play_order` on removal (the
     /// original only does this for images — leaving the video queue's
@@ -335,6 +342,17 @@ mod tests {
         let added = q.enqueue([item("a.mp4"), item("b.mp4"), item("a.mp4")]);
         assert_eq!(added.len(), 2);
         assert_eq!(q.len(), 2);
+    }
+
+    #[test]
+    fn extend_play_order_makes_merged_items_visible_while_shuffled() {
+        let mut q = queue_with(&["a", "b"]);
+        q.play_order = vec![1, 0];
+        let added = q.enqueue([item("c")]);
+        q.extend_play_order(&added);
+        let order = q.current_order("", true);
+        assert_eq!(order.len(), 3);
+        assert!(order.contains(&2));
     }
 
     #[test]

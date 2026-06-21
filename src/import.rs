@@ -97,7 +97,17 @@ pub fn import_paths(paths: Vec<PathBuf>, ctx: &ImportContext<'_>) {
             let _ = tx.send(named);
         });
     }
-    scan_folders(folders, ctx.scan_tx);
+    if !folders.is_empty() {
+        {
+            let mut state = ctx.state.borrow_mut();
+            state.library_loading = true;
+            if state.library_loading_message.is_empty() {
+                state.library_loading_message = "Scanning folder…".into();
+            }
+        }
+        ui_bridge::sync_loading_ui(ctx.app, &mut ctx.state.borrow_mut());
+        scan_folders(folders, ctx.scan_tx);
+    }
 }
 
 pub fn apply_file_import_batch(batch: FileImportBatch, ctx: &ImportContext<'_>) {

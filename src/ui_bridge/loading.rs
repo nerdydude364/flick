@@ -45,7 +45,7 @@ fn playlist_row_thumbnail(path: &Path) -> slint::Image {
     let Some(hash) = crate::thumbnails::hash::hash_video_file_cached(path).ok() else {
         return transparent_row_thumbnail();
     };
-    if !crate::thumbnails::cache::is_poster_cached(&hash) {
+    if !crate::thumbnails::cache::poster_is_ready(&hash) {
         return transparent_row_thumbnail();
     }
     poster_image_for_hash(&hash).unwrap_or_else(transparent_row_thumbnail)
@@ -66,7 +66,7 @@ fn playlist_busy(state: &AppState) -> bool {
     state.pending_playlist_rebuild.is_some()
 }
 
-fn gallery_busy(state: &AppState) -> bool {
+pub(crate) fn gallery_busy(state: &AppState) -> bool {
     state.gallery_thumbs_pending > 0
         && state.gallery_thumbs_loaded + state.gallery_thumbs_failed < state.gallery_thumbs_pending
 }
@@ -272,7 +272,7 @@ pub(crate) fn patch_playlist_thumbnail_for_hash(
     model: &VecModel<PlaylistItemData>,
     hash: &str,
 ) {
-    if !crate::thumbnails::cache::is_poster_cached(hash) {
+    if !crate::thumbnails::cache::poster_is_ready(hash) {
         return;
     }
     let Some(image) = poster_image_for_hash(hash) else {

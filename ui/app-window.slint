@@ -110,9 +110,14 @@ export component AppWindow inherits Window {
     // Prev/next walks the active mode's queue (All uses navigate-image → Rust all_queue).
     property <bool> queue-navigate-transport: all-mode && gallery-open;
     property <bool> show-video-scrub: show-video-transport && !slideshow-on;
-    // Thumbnail grid, or loading into it — chrome is hidden so the grid can fill the window.
+    // Thumbnail grid, or loading into it — bottom chrome is hidden so the grid
+    // can use more vertical space; the sidebar stays visible in all views.
     property <bool> gallery-grid-view: !gallery-open && (has-library-items || library-loading);
-    property <length> chrome-sidebar-w: gallery-grid-view ? 0px : (sidebar-open ? Theme.sidebar-width : 0px);
+    property <length> sidebar-min-width: Theme.sidebar-width;
+    property <length> sidebar-max-width: Theme.sidebar-width * 2;
+    in-out property <length> sidebar-user-width: Theme.sidebar-width;
+    property <bool> sidebar-resizing: false;
+    property <length> chrome-sidebar-w: sidebar-open ? sidebar-user-width : 0px;
     property <length> chrome-bottom-h: gallery-grid-view ? 0px : bottom-h;
 
     // Manual, persistent drawer state (toggled via the handle next to the
@@ -261,7 +266,7 @@ export component AppWindow inherits Window {
             y: 0;
             width: chrome-sidebar-w;
             height: 100%;
-            opacity: (chrome-visible && !gallery-grid-view) ? 1.0 : 0.0;
+            opacity: chrome-visible ? 1.0 : 0.0;
             pointer-hidden: pointer-hidden;
             library-loading: library-loading;
             library-loading-message: library-loading-message;
@@ -279,12 +284,62 @@ export component AppWindow inherits Window {
             preview-thumb-w: list-preview-thumb-w;
             preview-thumb-h: list-preview-thumb-h;
 
-            animate width { duration: 200ms; easing: ease-in-out; }
+            animate width { duration: sidebar-resizing ? 0ms : 200ms; easing: ease-in-out; }
             animate opacity { duration: 200ms; }
         }
 
-        // Drawer handle — hidden in gallery grid so the grid can use full width.
-        if !gallery-grid-view: IconButton {
+        // Left-edge grip — drag horizontally to resize the library panel.
+        if sidebar-open: Rectangle {
+            x: parent.width - chrome-sidebar-w - self.width / 2;
+            y: 0;
+            width: 8px;
+            height: 100%;
+
+            Rectangle {
+                x: (parent.width - self.width) / 2;
+                y: 0;
+                width: 2px;
+                height: 100%;
+                background: sidebar-resize-touch.has-hover || sidebar-resize-touch.pressed
+                    ? Theme.accent-soft-2
+                    : Theme.border;
+                opacity: sidebar-resize-touch.has-hover || sidebar-resize-touch.pressed ? 1.0 : 0.55;
+                animate background { duration: Theme.fast; }
+                animate opacity { duration: Theme.fast; }
+            }
+
+            sidebar-resize-touch := TouchArea {
+                width: 100%;
+                height: 100%;
+                enabled: !pointer-hidden;
+                mouse-cursor: pointer-hidden ? none : ew-resize;
+
+                pointer-event(event) => {
+                    if (event.button == PointerEventButton.left) {
+                        if (event.kind == PointerEventKind.down) {
+                            sidebar-resizing = true;
+                        } else if (event.kind == PointerEventKind.up) {
+                            sidebar-resizing = false;
+                        }
+                    }
+                }
+
+                moved => {
+                    if (self.pressed) {
+                        sidebar-user-width = max(
+                            sidebar-min-width,
+                            min(
+                                sidebar-max-width,
+                                sidebar-user-width - (self.mouse-x - self.pressed-x),
+                            ),
+                        );
+                    }
+                }
+            }
+        }
+
+        // Drawer handle — toggles sidebar width in every view.
+        IconButton {
             x: sidebar.x - self.width - 4px;
             y: 16px;
             size: 32px;

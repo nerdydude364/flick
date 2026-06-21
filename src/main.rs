@@ -617,35 +617,26 @@ fn wire_queue_management(app: &AppWindow, ctx: &AppContext) {
         let state = Rc::clone(&ctx.state);
         let model = Rc::clone(&ctx.model);
         let app_weak = app.as_weak();
+        let gallery_model = Rc::clone(&ctx.gallery_model);
+        let gallery_video_flags = Rc::clone(&ctx.gallery_video_flags);
+        let gallery_failed_flags = Rc::clone(&ctx.gallery_failed_flags);
+        let gallery_tx = ctx.gallery_tx.clone();
         app.on_clear_queue(move || {
             let Some(app) = app_weak.upgrade() else {
                 return;
             };
-            let mut state = state.borrow_mut();
-            match state.mode {
-                ui_bridge::Mode::Video => {
-                    state.queue.clear();
-                    state.gallery_open = false;
-                    ui_bridge::log_mpv_err("stop", mpv.command("stop", &[]));
-                    app.set_playing(false);
-                    ui_bridge::sync_video_view_ui(&app, &state);
-                }
-                ui_bridge::Mode::Image => {
-                    state.image_queue.clear();
-                    state.gallery_open = false;
-                    ui_bridge::sync_image_viewer_ui(&app, &mut state);
-                }
-                ui_bridge::Mode::All => {
-                    state.all_queue.clear();
-                    state.queue.clear();
-                    state.image_queue.clear();
-                    state.gallery_open = false;
-                    ui_bridge::log_mpv_err("stop", mpv.command("stop", &[]));
-                    app.set_playing(false);
-                    ui_bridge::sync_all_view_ui(&app, &mut state);
-                }
-            }
-            ui_bridge::rebuild_playlist_model(&mut state, &model);
+            ui_bridge::clear_library(
+                &mpv,
+                &app,
+                &mut state.borrow_mut(),
+                &model,
+                &ui_bridge::GalleryContext {
+                    thumbnails: &gallery_model,
+                    video_flags: &gallery_video_flags,
+                    failed_flags: &gallery_failed_flags,
+                    tx: &gallery_tx,
+                },
+            );
         });
     }
 }
@@ -829,25 +820,43 @@ fn wire_image_viewer(
     std::mem::forget(gif_timer);
 }
 
-/// Wires the "open folder" button: spawns a background thread to recursively
-/// scan the picked folder (magic-byte validation included) without blocking
-/// the UI; results stream back over `scan_tx` for the drain timer in `main`
-/// to pick up.
-fn wire_folder_scan(app: &AppWindow, scan_tx: std::sync::mpsc::Sender<Vec<library::ScannedFile>>) {
+/// Wires the "open folder" button through the shared import pipeline so
+/// merge-import, loading UI, and gallery refresh behave like drag-and-drop.
+fn wire_folder_scan(app: &AppWindow, ctx: &AppContext) {
     let app_weak = app.as_weak();
+    let mpv = Rc::clone(&ctx.mpv);
+    let state = Rc::clone(&ctx.state);
+    let model = Rc::clone(&ctx.model);
+    let scan_tx = ctx.scan_tx.clone();
+    let file_import_tx = ctx.file_import_tx.clone();
+    let gallery_model = Rc::clone(&ctx.gallery_model);
+    let gallery_video_flags = Rc::clone(&ctx.gallery_video_flags);
+    let gallery_failed_flags = Rc::clone(&ctx.gallery_failed_flags);
+    let gallery_tx = ctx.gallery_tx.clone();
     app.on_open_folder(move || {
-        if app_weak.upgrade().is_none() {
+        let Some(app) = app_weak.upgrade() else {
             return;
-        }
+        };
         let Some(folder) = dialogs::open_folder() else {
             return;
         };
-        let tx = scan_tx.clone();
-        std::thread::spawn(move || {
-            library::scan_folder(&folder, |batch| {
-                let _ = tx.send(batch);
-            });
-        });
+        import::import_paths(
+            vec![folder],
+            &import::ImportContext {
+                app: &app,
+                mpv: &mpv,
+                state: &state,
+                model: &model,
+                scan_tx: &scan_tx,
+                file_import_tx: &file_import_tx,
+                gallery: ui_bridge::GalleryContext {
+                    thumbnails: &gallery_model,
+                    video_flags: &gallery_video_flags,
+                    failed_flags: &gallery_failed_flags,
+                    tx: &gallery_tx,
+                },
+            },
+        );
     });
 }
 
@@ -1197,7 +1206,7 @@ fn main() {
     // over this channel and get drained on the UI thread by the timer below.
     // `Rc`-based state can't cross threads, so the channel only carries
     // plain `PathBuf`s plus that already-computed metadata.
-    wire_folder_scan(&app, scan_tx.clone());
+    wire_folder_scan(&app, &app_ctx);
     wire_file_drop(&app, drop_tx);
     wire_chrome_cursor_hiding(&app);
 
@@ -1226,8 +1235,12 @@ fn main() {
                     ui_bridge::apply_gallery_thumb(
                         &mut state.borrow_mut(),
                         &app,
-                        &gallery_model,
-                        &gallery_failed_flags,
+                        &ui_bridge::GalleryContext {
+                            thumbnails: &gallery_model,
+                            video_flags: &gallery_video_flags,
+                            failed_flags: &gallery_failed_flags,
+                            tx: &gallery_tx,
+                        },
                         &model,
                         result,
                     );
@@ -1288,6 +1301,7 @@ fn main() {
                     scanned.extend(batch);
                 }
                 if !scanned.is_empty() {
+                    let session_at_start = state.borrow().library_session;
                     let mut state_ref = state.borrow_mut();
                     let named = scanned
                         .into_iter()
@@ -1299,6 +1313,9 @@ fn main() {
                         })
                         .collect();
                     drop(state_ref);
+                    if session_at_start != state.borrow().library_session {
+                        return;
+                    }
                     ui_bridge::enqueue_paths(
                         &mpv,
                         &app,
