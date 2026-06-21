@@ -1,14 +1,11 @@
 use super::cache;
-use super::hash::hash_video_file;
+use super::hash::hash_video_file_cached;
 use image::imageops::FilterType;
 use std::path::Path;
 
-/// Square thumbnail size for the image-mode gallery grid — deliberately
-/// fixed and small regardless of the source resolution, so 1000+ multi-
-/// megapixel originals never get held in memory at full size (decoding and
-/// keeping every one of those as a Slint `Image` at once is what hung/OOM'd
-/// the grid before this).
-pub const POSTER_SIZE: u32 = 240;
+/// Square thumbnail size for the gallery grid — matches the ~120px cell size
+/// (with a little headroom for retina); keeps decode/encode/cache I/O small.
+pub const POSTER_SIZE: u32 = 128;
 
 /// Decodes+downscales+caches a `POSTER_SIZE`x`POSTER_SIZE` thumbnail for
 /// `path` if one isn't already cached, and returns its content hash either
@@ -21,8 +18,11 @@ pub fn ensure_poster_cached(path: &Path) -> Option<String> {
     // Generic content hash (size + head/tail chunks) — named for its
     // original video-sprite use but not video-specific, so it doubles as
     // the poster cache key here.
-    let hash = hash_video_file(path).ok()?;
-    if !cache::is_poster_cached(&hash) {
+    let hash = hash_video_file_cached(path).ok()?;
+    if cache::is_poster_cached(&hash) {
+        return Some(hash);
+    }
+    {
         let img = image::open(path).ok()?;
         // JPEG has no alpha channel — drop it (transparent source images
         // just get an implicit black background in the thumbnail).

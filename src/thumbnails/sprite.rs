@@ -1,6 +1,6 @@
 use super::cache;
 use super::frame::{ExtractError, extract_frame, probe_duration};
-use super::hash::hash_video_file;
+use super::hash::hash_video_file_cached;
 use image::{ImageBuffer, Rgba, RgbaImage};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -47,7 +47,7 @@ impl std::fmt::Display for SpriteError {
 /// no external dependency), and tiling goes through the `image` crate instead
 /// of ffmpeg's `tile` filter.
 pub fn generate_sprite(video_path: &Path) -> Result<(), SpriteError> {
-    let hash = hash_video_file(video_path).map_err(SpriteError::Io)?;
+    let hash = hash_video_file_cached(video_path).map_err(SpriteError::Io)?;
     let sprite_path = cache::sprite_file(&hash);
     let meta_path = cache::meta_file(&hash);
 
@@ -147,7 +147,7 @@ mod tests {
         let input = Path::new("/tmp/flick-test-media/test.mp4");
         assert!(input.exists(), "test fixture missing: {}", input.display());
 
-        let hash = hash_video_file(input).unwrap();
+        let hash = hash_video_file_cached(input).unwrap();
         let _ = std::fs::remove_file(cache::sprite_file(&hash));
         let _ = std::fs::remove_file(cache::meta_file(&hash));
 

@@ -1,6 +1,6 @@
 use super::gallery::GalleryContext;
 use super::gif::decode_gif;
-use super::loading::{rebuild_playlist_model, set_library_loading, sync_loading_ui};
+use super::loading::{rebuild_playlist_model, sync_loading_ui};
 use super::log_mpv_err;
 use super::sprite_preview::{clear_sprite_preview, hide_list_sprite_preview, sync_sprite_preview};
 use super::state::{AppState, Mode};
@@ -423,26 +423,34 @@ fn enqueue_image_paths(
     }
 }
 
-fn finish_import_gallery(
+fn finish_import(
     mpv: &Mpv,
     app: &AppWindow,
     state: &mut AppState,
     model: &VecModel<PlaylistItemData>,
-    gallery: &GalleryContext<'_>,
+    imported_count: usize,
+    single_path: Option<&PathBuf>,
 ) {
     if state.all_queue.is_empty() {
         return;
     }
-    super::gallery::open_gallery_grid(
-        mpv,
-        app,
-        state,
-        gallery,
-        super::gallery::GalleryReload::Force,
-    );
-    sync_active_view_ui(app, state);
+    if state.mode != Mode::All {
+        state.mode = Mode::All;
+        sync_mode_ui(app, state);
+    }
+    app.set_has_media(true);
     super::loading::schedule_playlist_rebuild(state, model);
-    sync_loading_ui(app, state);
+
+    if imported_count >= 2 {
+        state.gallery_open = false;
+        app.set_gallery_open(false);
+        state.pending_gallery_reload = true;
+    } else if let Some(path) = single_path {
+        let Some(index) = state.all_queue.index_of_path(path) else {
+            return;
+        };
+        present_item(mpv, app, state, model, index);
+    }
 }
 
 pub fn enqueue_paths(
@@ -451,13 +459,21 @@ pub fn enqueue_paths(
     state: &mut AppState,
     model: &VecModel<PlaylistItemData>,
     named_paths: Vec<(String, PathBuf, Option<u64>)>,
-    gallery: &GalleryContext<'_>,
+    _gallery: &GalleryContext<'_>,
 ) {
     let count = named_paths.len();
     if count > 0 {
         state.library_loading = true;
-        set_library_loading(app, true, &format!("Adding {count} items…"));
+        if state.library_loading_message.is_empty() {
+            state.library_loading_message = "Loading library…".into();
+        }
     }
+
+    let single_path = if count == 1 {
+        named_paths.first().map(|(_, path, _)| path.clone())
+    } else {
+        None
+    };
 
     state.all_queue.enqueue(
         named_paths
@@ -472,12 +488,7 @@ pub fn enqueue_paths(
     enqueue_video_paths(state, model, videos);
     enqueue_image_paths(state, model, images);
 
-    if state.mode != Mode::All {
-        set_mode(mpv, app, state, model, Mode::All, None);
-    }
-    finish_import_gallery(mpv, app, state, model, gallery);
-
-    state.library_loading = false;
+    finish_import(mpv, app, state, model, count, single_path.as_ref());
     sync_loading_ui(app, state);
 }
 

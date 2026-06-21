@@ -1,6 +1,5 @@
 use super::ext::{ext_lower, is_image_file, is_video_file};
 use super::magic::confirm_media_magic;
-use crate::thumbnails::hash::hash_video_file;
 use std::path::{Path, PathBuf};
 
 const SCAN_BATCH_SIZE: usize = 50;
@@ -13,10 +12,10 @@ const SCAN_BATCH_SIZE: usize = 50;
 pub struct ScannedFile {
     pub path: PathBuf,
     pub size: Option<u64>,
-    /// Content hash, only computed for videos — it's the sprite-cache key
-    /// `AppState::sprite_status_for` needs to show the sidebar's ✓/⏳/-
-    /// glyph, and that's the only thing that ever needs it.
-    pub video_hash: Option<String>,
+    /// Content hash (128 KB fingerprint) — computed during scan for every
+    /// media file so gallery thumbnail workers and sidebar sprite status can
+    /// reuse it without re-reading file headers on the UI thread.
+    pub content_hash: Option<String>,
 }
 
 /// Recursively scans `root` for video/image files, validating magic bytes
@@ -43,11 +42,14 @@ pub fn scan_folder(root: &Path, mut on_batch: impl FnMut(Vec<ScannedFile>)) {
         }
 
         let size = entry.metadata().ok().map(|m| m.len());
-        let video_hash = is_video.then(|| hash_video_file(&path).ok()).flatten();
+        let content_hash = crate::thumbnails::hash::hash_video_file(&path).ok();
+        if let Some(ref hash) = content_hash {
+            crate::thumbnails::hash::prime_content_hash(path.clone(), hash.clone());
+        }
         buffer.push(ScannedFile {
             path,
             size,
-            video_hash,
+            content_hash,
         });
         if buffer.len() >= SCAN_BATCH_SIZE {
             let mut batch = std::mem::take(&mut buffer);

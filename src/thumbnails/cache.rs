@@ -34,7 +34,7 @@ pub fn posters_dir() -> PathBuf {
 }
 
 pub fn poster_file(hash: &str) -> PathBuf {
-    posters_dir().join(format!("{hash}.jpg"))
+    posters_dir().join(format!("{hash}-s{}.jpg", super::poster::POSTER_SIZE))
 }
 
 pub fn is_poster_cached(hash: &str) -> bool {

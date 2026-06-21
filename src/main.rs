@@ -1206,13 +1206,6 @@ fn main() {
                             },
                         },
                     );
-                    schedule_pending_gallery_reload(
-                        app_weak.clone(),
-                        Rc::clone(&state),
-                        Rc::clone(&gallery_model),
-                        Rc::clone(&gallery_video_flags),
-                        gallery_tx.clone(),
-                    );
                 }
                 let mut dropped = Vec::new();
                 while let Ok(path) = drop_rx.try_recv() {
@@ -1254,7 +1247,7 @@ fn main() {
                     let named = scanned
                         .into_iter()
                         .map(|f| {
-                            if let Some(hash) = f.video_hash {
+                            if let Some(hash) = f.content_hash {
                                 state_ref.prime_sprite_hash(f.path.clone(), hash);
                             }
                             (ui_bridge::basename(&f.path), f.path, f.size)
@@ -1273,15 +1266,19 @@ fn main() {
                             tx: &gallery_tx,
                         },
                     );
-                    schedule_pending_gallery_reload(
-                        app_weak.clone(),
-                        Rc::clone(&state),
-                        Rc::clone(&gallery_model),
-                        Rc::clone(&gallery_video_flags),
-                        gallery_tx.clone(),
-                    );
                 }
                 ui_bridge::tick_playlist_rebuild(&app, &mut state.borrow_mut(), &model);
+                {
+                    let gallery = ui_bridge::GalleryContext {
+                        thumbnails: &gallery_model,
+                        video_flags: &gallery_video_flags,
+                        tx: &gallery_tx,
+                    };
+                    let mut state_ref = state.borrow_mut();
+                    ui_bridge::try_start_pending_gallery_reload(&mut state_ref, &app, &gallery);
+                    ui_bridge::try_finish_import_session(&mut state_ref, &app);
+                    ui_bridge::try_start_pending_gallery_reload(&mut state_ref, &app, &gallery);
+                }
                 while let Ok((hash, ok)) = sprite_rx.try_recv() {
                     ui_bridge::apply_sprite_result(&app, &mut state.borrow_mut(), &model, hash, ok);
                 }

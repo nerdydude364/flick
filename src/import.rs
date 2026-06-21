@@ -67,10 +67,18 @@ pub fn import_paths(paths: Vec<PathBuf>, ctx: &ImportContext<'_>) {
     }
     let (files, folders) = partition_paths(paths);
     if !files.is_empty() {
-        ui_bridge::set_library_loading(ctx.app, true, "Reading files…");
+        {
+            let mut state = ctx.state.borrow_mut();
+            state.library_loading = true;
+            state.library_loading_message = "Reading files…".into();
+        }
+        ui_bridge::sync_loading_ui(ctx.app, &mut ctx.state.borrow_mut());
         let tx = ctx.file_import_tx.clone();
         std::thread::spawn(move || {
             let named = named_media_entries(files);
+            for (_, path, _) in &named {
+                let _ = crate::thumbnails::hash::hash_video_file_cached(path);
+            }
             let _ = tx.send(named);
         });
     }
@@ -79,10 +87,6 @@ pub fn import_paths(paths: Vec<PathBuf>, ctx: &ImportContext<'_>) {
 
 pub fn apply_file_import_batch(batch: FileImportBatch, ctx: &ImportContext<'_>) {
     if batch.is_empty() {
-        let mut state = ctx.state.borrow_mut();
-        state.library_loading = false;
-        drop(state);
-        ui_bridge::sync_loading_ui(ctx.app, &ctx.state.borrow());
         return;
     }
     ui_bridge::enqueue_paths(

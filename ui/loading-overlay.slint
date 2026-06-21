@@ -26,26 +26,44 @@ export component LoadingOverlay inherits Rectangle {
     in property <bool> show: false;
     in property <string> message: "";
 
-    background: #000000a8;
+    background: transparent;
 
     if show: content := VerticalLayout {
         width: parent.width;
         height: parent.height;
-        alignment: center;
+        alignment: start;
         spacing: Theme.gap-sm;
 
         HorizontalLayout {
-            alignment: center;
-            LoadingSpinner { running: show; }
-        }
+            alignment: start;
+            spacing: Theme.gap-md;
+            padding-bottom: 16px;
+            padding-left: 16px;
+            padding-right: 16px;
+            width: parent.width;
+            height: 50px;
 
-        if message != "": HorizontalLayout {
-            alignment: center;
-            Text {
-                text: message;
-                color: Theme.muted;
-                font-size: 13px;
-                horizontal-alignment: center;
+            Rectangle {
+                background: #000000a8;
+                height: 50px;
+                width: parent.width;
+
+                HorizontalLayout {
+                    alignment: center;
+                    spacing: Theme.gap-sm;
+                    padding: 8px;
+                    width: parent.width;
+                    height: 50px;
+
+                    LoadingSpinner { running: show; }
+
+                    if message != "":Text {
+                        text: message;
+                        color: Theme.muted;
+                        font-size: 13px;
+                        vertical-alignment: center;
+                    }
+                }
             }
         }
     }

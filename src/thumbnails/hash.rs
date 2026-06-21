@@ -1,9 +1,37 @@
 use sha1::{Digest, Sha1};
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::{LazyLock, Mutex};
 
 const CHUNK: u64 = 64 * 1024;
+
+static CONTENT_HASH_CACHE: LazyLock<Mutex<HashMap<PathBuf, String>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// Seeds the process-wide content-hash cache (e.g. from a folder scan on a
+/// background thread) so gallery thumbnail workers don't re-read 128 KB per file.
+pub fn prime_content_hash(path: PathBuf, hash: String) {
+    if let Ok(mut cache) = CONTENT_HASH_CACHE.lock() {
+        cache.entry(path).or_insert(hash);
+    }
+}
+
+/// Like [`hash_video_file`], but memoized per path for the lifetime of the process.
+pub fn hash_video_file_cached(path: &Path) -> std::io::Result<String> {
+    let path_buf = path.to_path_buf();
+    if let Ok(cache) = CONTENT_HASH_CACHE.lock()
+        && let Some(hash) = cache.get(&path_buf)
+    {
+        return Ok(hash.clone());
+    }
+    let hash = hash_video_file(path)?;
+    if let Ok(mut cache) = CONTENT_HASH_CACHE.lock() {
+        cache.entry(path_buf).or_insert_with(|| hash.clone());
+    }
+    Ok(hash)
+}
 
 /// Fast content fingerprint: size + first 64 KB + last 64 KB. Exact port of
 /// `hashVideoFile` in main.js — used as the sprite cache key, so it must stay
