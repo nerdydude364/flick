@@ -7,7 +7,8 @@ currently being supported with security updates.
 
 | Version | Supported          |
 | ------- | ------------------ |
-| 1.5.x   | 🟢 |
+| 1.6.x   | 🟢 |
+| 1.5.x   | ☠️ |
 | 1.4.x   | ☠️ |
 | 1.3.x   | ☠️ |
 | 1.2.x   | ☠️ |
