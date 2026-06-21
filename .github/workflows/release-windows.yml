@@ -12,17 +12,10 @@ permissions:
   contents: write
 
 jobs:
-  package-windows:
-    name: package (windows-${{ matrix.arch }})
-    runs-on: ${{ matrix.runner }}
-    if: ${{ github.event.inputs.arch == matrix.arch }}
-    strategy:
-      matrix:
-        include:
-          - arch: amd64
-            runner: windows-latest
-          - arch: arm64
-            runner: windows-11-arm
+  package-windows-amd64:
+    name: package (windows-amd64)
+    if: ${{ github.event.inputs.arch == 'amd64' }}
+    runs-on: windows-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -38,7 +31,7 @@ jobs:
       - name: Cache cargo/target
         uses: Swatinem/rust-cache@v2
         with:
-          key: windows-${{ matrix.arch }}-v2
+          key: windows-amd64-v2
 
       - name: Verify Cargo.toml version
         shell: bash
@@ -56,7 +49,7 @@ jobs:
       - name: Download and extract libmpv
         shell: bash
         env:
-          MPV_ARCH: ${{ matrix.arch }}
+          MPV_ARCH: amd64
         run: ./scripts/mpv-windows-setup.sh
 
       - name: Set LIBCLANG_PATH
@@ -67,12 +60,70 @@ jobs:
       - name: Package Windows installer
         shell: pwsh
         env:
-          MPV_ARCH: ${{ matrix.arch }}
+          MPV_ARCH: amd64
         run: ./scripts/package-windows.ps1
 
       - name: Upload installer artifact
         uses: actions/upload-artifact@v4
         with:
-          name: flick-windows-${{ matrix.arch }}
+          name: flick-windows-amd64
+          path: dist/*-setup.exe
+          if-no-files-found: error
+
+  package-windows-arm64:
+    name: package (windows-arm64)
+    if: ${{ github.event.inputs.arch == 'arm64' }}
+    runs-on: windows-11-arm
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Windows build deps
+        shell: pwsh
+        run: |
+          choco install -y 7zip
+
+      - name: Cache cargo/target
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: windows-arm64-v2
+
+      - name: Verify Cargo.toml version
+        shell: bash
+        run: |
+          CARGO_VERSION="$(grep -m1 '^version' Cargo.toml | sed -E 's/version = "(.*)"/\1/')"
+          echo "VERSION=$CARGO_VERSION" >> "$GITHUB_ENV"
+
+      - name: Sync Packager.toml version
+        shell: bash
+        run: perl -i -pe "s/^version = .*/version = \"$VERSION\"/" Packager.toml
+
+      - name: Install cargo-packager
+        run: cargo install --locked cargo-packager
+
+      - name: Download and extract libmpv
+        shell: bash
+        env:
+          MPV_ARCH: arm64
+        run: ./scripts/mpv-windows-setup.sh
+
+      - name: Set LIBCLANG_PATH
+        shell: pwsh
+        run: |
+          echo "LIBCLANG_PATH=C:\Program Files\LLVM\bin" | Out-File -Encoding utf8 -Append -FilePath $env:GITHUB_ENV
+
+      - name: Package Windows installer
+        shell: pwsh
+        env:
+          MPV_ARCH: arm64
+        run: ./scripts/package-windows.ps1
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: flick-windows-arm64
           path: dist/*-setup.exe
           if-no-files-found: error
