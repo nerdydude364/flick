@@ -95,10 +95,10 @@ fn prepare_gallery_view(mpv: &Mpv, app: &AppWindow, state: &mut AppState) {
             timer.stop();
         }
     }
-    if state.mode == Mode::Video || (state.mode == Mode::All && state.all_current_is_video) {
-        let _ = mpv.command("stop", &[]);
-        app.set_playing(false);
-    } else if state.mode == Mode::Image {
+    if state.mode == Mode::Video
+        || state.mode == Mode::Image
+        || (state.mode == Mode::All && state.all_current_is_video)
+    {
         let _ = mpv.command("stop", &[]);
         app.set_playing(false);
     }
@@ -250,10 +250,10 @@ pub fn apply_gallery_thumb(
     if generation != state.gallery_generation || pos >= gallery_model.row_count() {
         return;
     }
-    if let Some(hash) = hash {
-        if let Some(image) = crate::thumbnails::load_cached_poster(&hash) {
-            gallery_model.set_row_data(pos, image);
-        }
+    if let Some(hash) = hash
+        && let Some(image) = crate::thumbnails::load_cached_poster(&hash)
+    {
+        gallery_model.set_row_data(pos, image);
     }
     if state.gallery_thumbs_loaded < state.gallery_thumbs_pending {
         state.gallery_thumbs_loaded += 1;

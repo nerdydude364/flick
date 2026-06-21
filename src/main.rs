@@ -203,6 +203,18 @@ struct ImportWiring {
     gallery_tx: std::sync::mpsc::Sender<ui_bridge::GalleryThumbResult>,
 }
 
+/// Shared handles passed into UI callback wiring helpers.
+struct AppContext {
+    mpv: Rc<Mpv>,
+    state: Rc<RefCell<AppState>>,
+    model: Rc<VecModel<PlaylistItemData>>,
+    scan_tx: std::sync::mpsc::Sender<Vec<library::ScannedFile>>,
+    file_import_tx: std::sync::mpsc::Sender<import::FileImportBatch>,
+    gallery_model: Rc<VecModel<slint::Image>>,
+    gallery_video_flags: Rc<VecModel<bool>>,
+    gallery_tx: std::sync::mpsc::Sender<ui_bridge::GalleryThumbResult>,
+}
+
 fn wire_video_underlay(
     app: &AppWindow,
     mpv: &Rc<Mpv>,
@@ -458,19 +470,9 @@ fn wire_playback_controls(app: &AppWindow, mpv: &Rc<Mpv>, state: &Rc<RefCell<App
 /// Wires sidebar/library-management callbacks shared by both the video and
 /// image queues: reveal-in-file-manager, remove, drag-reorder, opening new
 /// files, switching between video/image mode, and clearing the active queue.
-fn wire_queue_management(
-    app: &AppWindow,
-    mpv: &Rc<Mpv>,
-    state: &Rc<RefCell<AppState>>,
-    model: &Rc<VecModel<PlaylistItemData>>,
-    scan_tx: &std::sync::mpsc::Sender<Vec<library::ScannedFile>>,
-    file_import_tx: &std::sync::mpsc::Sender<import::FileImportBatch>,
-    gallery_model: &Rc<VecModel<slint::Image>>,
-    gallery_video_flags: &Rc<VecModel<bool>>,
-    gallery_tx: &std::sync::mpsc::Sender<ui_bridge::GalleryThumbResult>,
-) {
+fn wire_queue_management(app: &AppWindow, ctx: &AppContext) {
     {
-        let state = Rc::clone(state);
+        let state = Rc::clone(&ctx.state);
         app.on_reveal_item(move |queue_index| {
             let state = state.borrow();
             let item = state.active_queue().item(queue_index as usize);
@@ -481,9 +483,9 @@ fn wire_queue_management(
     }
 
     {
-        let mpv = Rc::clone(mpv);
-        let state = Rc::clone(state);
-        let model = Rc::clone(model);
+        let mpv = Rc::clone(&ctx.mpv);
+        let state = Rc::clone(&ctx.state);
+        let model = Rc::clone(&ctx.model);
         let app_weak = app.as_weak();
         app.on_remove_item(move |queue_index| {
             let Some(app) = app_weak.upgrade() else {
@@ -500,23 +502,23 @@ fn wire_queue_management(
     }
 
     {
-        let state = Rc::clone(state);
-        let model = Rc::clone(model);
+        let state = Rc::clone(&ctx.state);
+        let model = Rc::clone(&ctx.model);
         app.on_reorder_item(move |src, dst| {
             ui_bridge::reorder_item(&mut state.borrow_mut(), &model, src as usize, dst as usize);
         });
     }
 
     {
-        let mpv = Rc::clone(mpv);
-        let state = Rc::clone(state);
-        let model = Rc::clone(model);
+        let mpv = Rc::clone(&ctx.mpv);
+        let state = Rc::clone(&ctx.state);
+        let model = Rc::clone(&ctx.model);
         let app_weak = app.as_weak();
-        let scan_tx = scan_tx.clone();
-        let file_import_tx = file_import_tx.clone();
-        let gallery_model = Rc::clone(gallery_model);
-        let gallery_video_flags = Rc::clone(gallery_video_flags);
-        let gallery_tx = gallery_tx.clone();
+        let scan_tx = ctx.scan_tx.clone();
+        let file_import_tx = ctx.file_import_tx.clone();
+        let gallery_model = Rc::clone(&ctx.gallery_model);
+        let gallery_video_flags = Rc::clone(&ctx.gallery_video_flags);
+        let gallery_tx = ctx.gallery_tx.clone();
         let open_media: Rc<dyn Fn()> = Rc::new(move || {
             let Some(app) = app_weak.upgrade() else {
                 return;
@@ -549,13 +551,13 @@ fn wire_queue_management(
     }
 
     {
-        let mpv = Rc::clone(mpv);
-        let state = Rc::clone(state);
-        let model = Rc::clone(model);
+        let mpv = Rc::clone(&ctx.mpv);
+        let state = Rc::clone(&ctx.state);
+        let model = Rc::clone(&ctx.model);
         let app_weak = app.as_weak();
-        let gallery_model = Rc::clone(gallery_model);
-        let gallery_video_flags = Rc::clone(gallery_video_flags);
-        let gallery_tx = gallery_tx.clone();
+        let gallery_model = Rc::clone(&ctx.gallery_model);
+        let gallery_video_flags = Rc::clone(&ctx.gallery_video_flags);
+        let gallery_tx = ctx.gallery_tx.clone();
         app.on_set_view_mode(move |mode| {
             let Some(app) = app_weak.upgrade() else {
                 return;
@@ -589,9 +591,9 @@ fn wire_queue_management(
     }
 
     {
-        let mpv = Rc::clone(mpv);
-        let state = Rc::clone(state);
-        let model = Rc::clone(model);
+        let mpv = Rc::clone(&ctx.mpv);
+        let state = Rc::clone(&ctx.state);
+        let model = Rc::clone(&ctx.model);
         let app_weak = app.as_weak();
         app.on_clear_queue(move || {
             let Some(app) = app_weak.upgrade() else {
@@ -631,20 +633,15 @@ fn wire_queue_management(
 /// playback (see `tick_gif_animation`'s doc comment for why it's a poll).
 fn wire_image_viewer(
     app: &AppWindow,
-    mpv: &Rc<Mpv>,
-    state: &Rc<RefCell<AppState>>,
-    model: &Rc<VecModel<PlaylistItemData>>,
-    gallery_model: &Rc<VecModel<slint::Image>>,
-    gallery_video_flags: &Rc<VecModel<bool>>,
-    gallery_tx: &std::sync::mpsc::Sender<ui_bridge::GalleryThumbResult>,
+    ctx: &AppContext,
     slideshow_timer: &Rc<slint::Timer>,
     sprite_timer: &Rc<slint::Timer>,
     sprite_tx: &std::sync::mpsc::Sender<(String, bool)>,
 ) {
     {
-        let mpv = Rc::clone(mpv);
-        let state = Rc::clone(state);
-        let model = Rc::clone(model);
+        let mpv = Rc::clone(&ctx.mpv);
+        let state = Rc::clone(&ctx.state);
+        let model = Rc::clone(&ctx.model);
         let app_weak = app.as_weak();
         app.on_navigate_image(move |delta| {
             let Some(app) = app_weak.upgrade() else {
@@ -672,12 +669,12 @@ fn wire_image_viewer(
     let slideshow_timer = Rc::clone(slideshow_timer);
 
     {
-        let mpv = Rc::clone(mpv);
-        let state = Rc::clone(state);
-        let gallery_model = Rc::clone(gallery_model);
-        let gallery_tx = gallery_tx.clone();
+        let mpv = Rc::clone(&ctx.mpv);
+        let state = Rc::clone(&ctx.state);
+        let gallery_model = Rc::clone(&ctx.gallery_model);
+        let gallery_tx = ctx.gallery_tx.clone();
         let slideshow_timer = Rc::clone(&slideshow_timer);
-        let gallery_video_flags = Rc::clone(gallery_video_flags);
+        let gallery_video_flags = Rc::clone(&ctx.gallery_video_flags);
         let app_weak = app.as_weak();
         app.on_toggle_gallery(move || {
             let Some(app) = app_weak.upgrade() else {
@@ -704,9 +701,9 @@ fn wire_image_viewer(
     }
 
     {
-        let mpv = Rc::clone(mpv);
-        let state = Rc::clone(state);
-        let model = Rc::clone(model);
+        let mpv = Rc::clone(&ctx.mpv);
+        let state = Rc::clone(&ctx.state);
+        let model = Rc::clone(&ctx.model);
         let app_weak = app.as_weak();
         let sprite_timer = Rc::clone(sprite_timer);
         let sprite_tx = sprite_tx.clone();
@@ -748,9 +745,9 @@ fn wire_image_viewer(
     }
 
     {
-        let mpv = Rc::clone(mpv);
-        let state = Rc::clone(state);
-        let model = Rc::clone(model);
+        let mpv = Rc::clone(&ctx.mpv);
+        let state = Rc::clone(&ctx.state);
+        let model = Rc::clone(&ctx.model);
         let slideshow_timer = Rc::clone(&slideshow_timer);
         let app_weak = app.as_weak();
         app.on_toggle_slideshow(move || {
@@ -768,9 +765,9 @@ fn wire_image_viewer(
     }
 
     {
-        let mpv = Rc::clone(mpv);
-        let state = Rc::clone(state);
-        let model = Rc::clone(model);
+        let mpv = Rc::clone(&ctx.mpv);
+        let state = Rc::clone(&ctx.state);
+        let model = Rc::clone(&ctx.model);
         let slideshow_timer = Rc::clone(&slideshow_timer);
         let app_weak = app.as_weak();
         app.on_slideshow_duration_changed(move |seconds| {
@@ -791,7 +788,7 @@ fn wire_image_viewer(
     // see `tick_gif_animation`'s doc comment.
     let gif_timer = slint::Timer::default();
     {
-        let state = Rc::clone(state);
+        let state = Rc::clone(&ctx.state);
         let app_weak = app.as_weak();
         gif_timer.start(
             slint::TimerMode::Repeated,
@@ -1138,32 +1135,21 @@ fn main() {
         },
     );
     wire_playback_controls(&app, &mpv, &state);
-    wire_queue_management(
-        &app,
-        &mpv,
-        &state,
-        &model,
-        &scan_tx,
-        &file_import_tx,
-        &gallery_model,
-        &gallery_video_flags,
-        &gallery_tx,
-    );
+    let app_ctx = AppContext {
+        mpv: Rc::clone(&mpv),
+        state: Rc::clone(&state),
+        model: Rc::clone(&model),
+        scan_tx: scan_tx.clone(),
+        file_import_tx: file_import_tx.clone(),
+        gallery_model: Rc::clone(&gallery_model),
+        gallery_video_flags: Rc::clone(&gallery_video_flags),
+        gallery_tx: gallery_tx.clone(),
+    };
+    wire_queue_management(&app, &app_ctx);
     // Centralize the slideshow timer so mode switches can stop it reliably.
     let slideshow_timer = Rc::new(slint::Timer::default());
     state.borrow_mut().slideshow_timer = Some(Rc::clone(&slideshow_timer));
-    wire_image_viewer(
-        &app,
-        &mpv,
-        &state,
-        &model,
-        &gallery_model,
-        &gallery_video_flags,
-        &gallery_tx,
-        &slideshow_timer,
-        &sprite_timer,
-        &sprite_tx,
-    );
+    wire_image_viewer(&app, &app_ctx, &slideshow_timer, &sprite_timer, &sprite_tx);
 
     // Folder scanning runs on a background thread (recursive walk + magic-byte
     // checks, plus the size/video-hash `stat()`+SHA1 work — see

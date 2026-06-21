@@ -169,8 +169,8 @@ pub fn tick_playlist_rebuild(
     };
 
     let end = (next_index + PLAYLIST_REBUILD_CHUNK).min(total);
-    for display_index in next_index..end {
-        let queue_index = filtered[display_index];
+    for (display_index, &queue_index) in filtered[next_index..end].iter().enumerate() {
+        let display_index = next_index + display_index;
         let row = build_playlist_row(
             state,
             queue_index,
