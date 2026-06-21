@@ -110,13 +110,25 @@ echo "==> Extracting mpv runtime"
 
 # shinchiro archives flatten to a single directory of files.
 shopt -s nullglob
-dev_root="$(find "$TMP/dev" -name 'libmpv-2.dll' -print -quit | xargs -I{} dirname {})"
-runtime_root="$(find "$TMP/runtime" -name 'libmpv-2.dll' -print -quit | xargs -I{} dirname {})"
-if [ -z "$dev_root" ] || [ -z "$runtime_root" ]; then
-  echo "FAILED: could not locate libmpv-2.dll in downloaded archives" >&2
+find_root() {
+  local root="$1"
+  local marker="$2"
+  find "$root" -name "$marker" -print -quit | xargs -I{} dirname {}
+}
+
+dev_root="$(find_root "$TMP/dev" 'libmpv-2.dll')"
+runtime_root="$(find_root "$TMP/runtime" 'mpv.exe')"
+if [ -z "$runtime_root" ]; then
+  runtime_root="$(find_root "$TMP/runtime" 'd3dcompiler_43.dll')"
+fi
+if [ -z "$dev_root" ]; then
+  echo "FAILED: could not locate libmpv-2.dll in downloaded dev archive" >&2
   exit 1
 fi
-
+if [ -z "$runtime_root" ]; then
+  echo "FAILED: could not locate runtime root in downloaded runtime archive" >&2
+  exit 1
+fi
 cp -f "$dev_root/libmpv-2.dll" "$MPV_DIR/bin/"
 if [ -d "$dev_root/include" ]; then
   cp -a "$dev_root/include" "$MPV_DIR/"
