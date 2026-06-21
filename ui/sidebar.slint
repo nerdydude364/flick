@@ -10,6 +10,7 @@ export struct PlaylistItemData {
     sprite-status: string,
     file-size-text: string,
     is-video: bool,
+    thumbnail: image,
 }
 
 export component Sidebar inherits Rectangle {
@@ -212,13 +213,12 @@ export component Sidebar inherits Rectangle {
                                 height: 32px;
                                 border-radius: Theme.radius-sm;
                                 background: Theme.surface-3;
+                                clip: true;
                                 Image {
-                                    source: (view-mode == 0 || (view-mode == 2 && entry.is-video))
-                                        ? @image-url("icons/video-file.svg")
-                                        : @image-url("icons/image-file.svg");
-                                    width: 15px;
-                                    height: 15px;
-                                    colorize: entry.playing ? Theme.accent : Theme.muted;
+                                    source: entry.thumbnail;
+                                    width: 100%;
+                                    height: 100%;
+                                    image-fit: cover;
                                 }
                             }
 

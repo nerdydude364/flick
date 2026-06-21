@@ -280,5 +280,19 @@ fn build_playlist_row(
         sprite_status: glyph.into(),
         file_size_text: size_text.into(),
         is_video,
+        thumbnail: playlist_row_thumbnail(&item.path),
     }
+}
+
+fn playlist_row_thumbnail(path: &std::path::Path) -> slint::Image {
+    if let Some(hash) = crate::thumbnails::hash::hash_video_file_cached(path).ok() {
+        if crate::thumbnails::cache::is_poster_cached(&hash) {
+            if let Some(image) = crate::thumbnails::load_cached_poster(&hash) {
+                return image;
+            }
+        }
+    }
+    let pixel_buffer =
+        slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(&[0, 0, 0, 0], 1, 1);
+    slint::Image::from_rgba8(pixel_buffer)
 }
