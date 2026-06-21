@@ -118,6 +118,9 @@ export component AppWindow inherits Window {
     // opacity on the chrome only — never affects layout/width — so it can
     // fade back in instantly with no relayout.
     property <bool> chrome-visible: true;
+    // Hide the system cursor while chrome is faded out — re-shown on the same
+    // mouse/key activity that wakes the controls (see hide-timer below).
+    property <bool> pointer-hidden: !chrome-visible;
     // Combined height of the scrub row + transport row below — the sidebar
     // stops above them rather than running the full window height, matching
     // the design's grid (sidebar only shares row 1 with the canvas).
@@ -169,6 +172,19 @@ export component AppWindow inherits Window {
     callback list-item-hovered <=> sidebar.item-hovered;
     callback list-item-unhovered <=> sidebar.item-unhovered;
 
+    // Rust uses this to call winit `set_cursor_visible` immediately when chrome
+    // auto-hides — Slint only refreshes TouchArea cursors on pointer events.
+    callback chrome-visibility-changed(bool /* chrome-visible */);
+
+    changed chrome-visible => {
+        chrome-visibility-changed(chrome-visible);
+    }
+
+    function wake-chrome() {
+        chrome-visible = true;
+        hide-timer.restart();
+    }
+
     forward-focus: key-handler;
 
     // Single ancestor TouchArea wrapping the whole window's content, purely
@@ -187,9 +203,10 @@ export component AppWindow inherits Window {
         y: 0;
         width: 100%;
         height: 100%;
+        mouse-cursor: pointer-hidden ? none : default;
 
-        changed mouse-x => { chrome-visible = true; hide-timer.restart(); }
-        changed mouse-y => { chrome-visible = true; hide-timer.restart(); }
+        changed mouse-x => { wake-chrome(); }
+        changed mouse-y => { wake-chrome(); }
         double-clicked => { toggle-fullscreen(); key-handler.focus(); }
 
         // Canvas click layer (video mode) — sits behind chrome; toggles play/pause
@@ -202,6 +219,7 @@ export component AppWindow inherits Window {
             y: 0;
             width: parent.width - chrome-sidebar-w;
             height: parent.height - chrome-bottom-h;
+            mouse-cursor: pointer-hidden ? none : default;
             clicked => { toggle-play(); key-handler.focus(); }
             double-clicked => { toggle-fullscreen(); key-handler.focus(); }
         }
@@ -211,6 +229,7 @@ export component AppWindow inherits Window {
             y: 0;
             width: 100%;
             height: 100%;
+            pointer-hidden: pointer-hidden;
             hit-width: parent.width - chrome-sidebar-w;
             hit-height: parent.height - chrome-bottom-h;
             has-images: has-library-items;
@@ -238,6 +257,7 @@ export component AppWindow inherits Window {
             width: chrome-sidebar-w;
             height: 100%;
             opacity: (chrome-visible && !gallery-grid-view) ? 1.0 : 0.0;
+            pointer-hidden: pointer-hidden;
             library-loading: library-loading;
             library-loading-message: library-loading-message;
             items: playlist-items;
@@ -266,6 +286,7 @@ export component AppWindow inherits Window {
             icon-size: 15px;
             icon: @image-url("icons/drawer.svg");
             opacity: chrome-visible ? 1.0 : 0.0;
+            pointer-hidden: pointer-hidden;
             animate opacity { duration: 200ms; }
             clicked => { sidebar-open = !sidebar-open; key-handler.focus(); }
         }
@@ -301,7 +322,11 @@ export component AppWindow inherits Window {
                         vertical-alignment: center;
                         color: view-mode == 2 ? Theme.accent : Theme.muted;
                     }
-                    TouchArea { clicked => { if (view-mode != 2) { set-view-mode(2); } key-handler.focus(); } }
+                    TouchArea {
+                        enabled: !pointer-hidden;
+                        mouse-cursor: pointer-hidden ? none : default;
+                        clicked => { if (view-mode != 2) { set-view-mode(2); } key-handler.focus(); }
+                    }
                 }
                 Rectangle {
                     height: 26px;
@@ -316,7 +341,11 @@ export component AppWindow inherits Window {
                         vertical-alignment: center;
                         color: view-mode == 0 ? Theme.accent : Theme.muted;
                     }
-                    TouchArea { clicked => { if (view-mode != 0) { set-view-mode(0); } key-handler.focus(); } }
+                    TouchArea {
+                        enabled: !pointer-hidden;
+                        mouse-cursor: pointer-hidden ? none : default;
+                        clicked => { if (view-mode != 0) { set-view-mode(0); } key-handler.focus(); }
+                    }
                 }
                 Rectangle {
                     height: 26px;
@@ -331,7 +360,11 @@ export component AppWindow inherits Window {
                         vertical-alignment: center;
                         color: view-mode == 1 ? Theme.accent : Theme.muted;
                     }
-                    TouchArea { clicked => { if (view-mode != 1) { set-view-mode(1); } key-handler.focus(); } }
+                    TouchArea {
+                        enabled: !pointer-hidden;
+                        mouse-cursor: pointer-hidden ? none : default;
+                        clicked => { if (view-mode != 1) { set-view-mode(1); } key-handler.focus(); }
+                    }
                 }
             }
         }
@@ -358,7 +391,10 @@ export component AppWindow inherits Window {
             opacity: chrome-visible ? 1.0 : 0.0;
             animate opacity { duration: 200ms; }
 
-            TouchArea { }
+            TouchArea {
+                enabled: !pointer-hidden;
+                mouse-cursor: pointer-hidden ? none : default;
+            }
 
             if show-video-scrub: HorizontalLayout {
                 padding-left: 16px;
@@ -375,6 +411,7 @@ export component AppWindow inherits Window {
                 }
                 ProgressBar {
                     horizontal-stretch: 1;
+                    pointer-hidden: pointer-hidden;
                     current-time: current-time;
                     duration: duration;
                     ab-loop-a: ab-loop-a;
@@ -437,7 +474,10 @@ export component AppWindow inherits Window {
             opacity: chrome-visible ? 1.0 : 0.0;
             animate opacity { duration: 200ms; }
 
-            TouchArea { }
+            TouchArea {
+                enabled: !pointer-hidden;
+                mouse-cursor: pointer-hidden ? none : default;
+            }
 
             HorizontalLayout {
                 padding-left: 16px;
@@ -450,6 +490,7 @@ export component AppWindow inherits Window {
                 // for whichever view mode is active.
                 if !gallery-grid-view && gallery-open: IconButton {
                     icon: @image-url("icons/grid.svg");
+                    pointer-hidden: pointer-hidden;
                     clicked => { toggle-gallery(); key-handler.focus(); }
                 }
 
@@ -458,15 +499,18 @@ export component AppWindow inherits Window {
                     width: 250px;
                     IconButton {
                         icon: @image-url("icons/cc.svg");
+                        pointer-hidden: pointer-hidden;
                         clicked => { add-subtitle(); key-handler.focus(); }
                     }
                     IconButton {
                         icon: @image-url("icons/camera.svg");
+                        pointer-hidden: pointer-hidden;
                         clicked => { take-screenshot(); key-handler.focus(); }
                     }
                     IconButton {
                         icon: @image-url("icons/rewind10.svg");
                         has-badge: true;
+                        pointer-hidden: pointer-hidden;
                         badge: "10";
                         clicked => { seek-relative(-10.0); key-handler.focus(); }
                     }
@@ -474,6 +518,7 @@ export component AppWindow inherits Window {
                         icon: @image-url("icons/forward10.svg");
                         has-badge: true;
                         badge: "10";
+                        pointer-hidden: pointer-hidden;
                         clicked => { seek-relative(10.0); key-handler.focus(); }
                     }
                     IconButton {
@@ -481,6 +526,7 @@ export component AppWindow inherits Window {
                         active: ab-loop-active || ab-loop-picking;
                         has-badge: ab-loop-picking;
                         badge: ab-loop-a >= 0 ? "B" : "A";
+                        pointer-hidden: pointer-hidden;
                         clicked => { toggle-ab-loop(); key-handler.focus(); }
                     }
                     Rectangle {
@@ -496,7 +542,11 @@ export component AppWindow inherits Window {
                             horizontal-alignment: center;
                             vertical-alignment: center;
                         }
-                        speed-touch := TouchArea { clicked => { cycle-speed(); key-handler.focus(); } }
+                        speed-touch := TouchArea {
+                            enabled: !pointer-hidden;
+                            mouse-cursor: pointer-hidden ? none : default;
+                            clicked => { cycle-speed(); key-handler.focus(); }
+                        }
                     }
                 }
 
@@ -504,6 +554,7 @@ export component AppWindow inherits Window {
                     spacing: 8px;
                     IconButton {
                         icon: @image-url("icons/zoom-out.svg");
+                        pointer-hidden: pointer-hidden;
                         clicked => {
                             image-zoom = max(5, image-zoom - 5);
                             key-handler.focus();
@@ -523,6 +574,7 @@ export component AppWindow inherits Window {
                     }
                     IconButton {
                         icon: @image-url("icons/zoom-in.svg");
+                        pointer-hidden: pointer-hidden;
                         clicked => {
                             image-zoom = min(500, image-zoom + 5);
                             key-handler.focus();
@@ -530,6 +582,7 @@ export component AppWindow inherits Window {
                     }
                     IconButton {
                         icon: @image-url("icons/rotate.svg");
+                        pointer-hidden: pointer-hidden;
                         clicked => {
                             image-rotation-deg = image-rotation-deg - 45;
                             key-handler.focus();
@@ -547,6 +600,7 @@ export component AppWindow inherits Window {
                             size: Theme.control;
                             icon-size: 18px;
                             icon: @image-url("icons/prev.svg");
+                            pointer-hidden: pointer-hidden;
                             clicked => {
                                 if (slideshow-transport || queue-navigate-transport) { navigate-image(-1); }
                                 else { previous-track(); }
@@ -558,6 +612,7 @@ export component AppWindow inherits Window {
                             icon-size: 18px;
                             filled: true;
                             enabled: !(slideshow-transport && !gallery-open);
+                            pointer-hidden: pointer-hidden;
                             icon: (slideshow-transport ? slideshow-on : playing) ? @image-url("icons/pause.svg") : @image-url("icons/play.svg");
                             clicked => {
                                 if (slideshow-transport) { toggle-slideshow(); }
@@ -569,6 +624,7 @@ export component AppWindow inherits Window {
                             size: Theme.control;
                             icon-size: 18px;
                             icon: @image-url("icons/next.svg");
+                            pointer-hidden: pointer-hidden;
                             clicked => {
                                 if (slideshow-transport || queue-navigate-transport) { navigate-image(1); }
                                 else { next-track(); }
@@ -588,6 +644,7 @@ export component AppWindow inherits Window {
                         width: 200px;
                         if show-video-scrub: IconButton {
                             icon: volume-value <= 0 ? @image-url("icons/volume-mute.svg") : @image-url("icons/volume.svg");
+                            pointer-hidden: pointer-hidden;
                             clicked => {
                                 if (volume-value <= 0) {
                                     volume-value = max(volume-before-mute, 1.0);
@@ -602,6 +659,7 @@ export component AppWindow inherits Window {
                         if show-video-scrub: TrackSlider {
                             hit-h: Theme.control;
                             horizontal-stretch: 1;
+                            pointer-hidden: pointer-hidden;
                             value: volume-value / 100.0;
                             changed(v) => { volume-value = v * 100.0; volume-changed(volume-value); }
                         }
@@ -610,6 +668,7 @@ export component AppWindow inherits Window {
                             TrackSlider {
                                 hit-h: Theme.control;
                                 width: 150px;
+                                pointer-hidden: pointer-hidden;
                                 value: (slideshow-seconds - 2.0) / 298.0;
                                 changed(v) => {
                                     slideshow-seconds = 2.0 + v * 298.0;
@@ -622,6 +681,7 @@ export component AppWindow inherits Window {
 
                     IconButton {
                         icon: is-fullscreen ? @image-url("icons/fullscreen-exit.svg") : @image-url("icons/fullscreen-enter.svg");
+                        pointer-hidden: pointer-hidden;
                         clicked => { toggle-fullscreen(); key-handler.focus(); }
                     }
                 }
@@ -648,6 +708,7 @@ export component AppWindow inherits Window {
                 IconButton {
                     size: 28px;
                     icon-size: 13px;
+                    pointer-hidden: pointer-hidden;
                     icon: @image-url("icons/close.svg");
                     clicked => { dismiss-error(); key-handler.focus(); }
                 }
@@ -656,8 +717,7 @@ export component AppWindow inherits Window {
 
         key-handler := FocusScope {
             key-pressed(event) => {
-                chrome-visible = true;
-                hide-timer.restart();
+                wake-chrome();
                 if (event.text == Key.Escape) {
                     if (is-fullscreen) { toggle-fullscreen(); }
                     else if (gallery-open) { toggle-gallery(); }
@@ -678,6 +738,36 @@ export component AppWindow inherits Window {
                 } else {
                     reject
                 }
+            }
+        }
+
+        // Topmost layer while chrome is faded out — wins over every nested
+        // TouchArea, ListView, TextInput, Flickable, etc. so `mouse-cursor:
+        // none` actually reaches winit. Also forwards the same wake/click
+        // behavior as the canvas layer below.
+        if pointer-hidden: TouchArea {
+            x: 0;
+            y: 0;
+            width: 100%;
+            height: 100%;
+            mouse-cursor: none;
+
+            changed mouse-x => { wake-chrome(); }
+            changed mouse-y => { wake-chrome(); }
+
+            clicked => {
+                wake-chrome();
+                if (show-video-canvas) {
+                    toggle-play();
+                } else if (show-image-transport && gallery-open) {
+                    toggle-slideshow();
+                }
+                key-handler.focus();
+            }
+            double-clicked => {
+                wake-chrome();
+                toggle-fullscreen();
+                key-handler.focus();
             }
         }
     }

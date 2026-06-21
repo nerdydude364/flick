@@ -21,6 +21,7 @@ export component Sidebar inherits Rectangle {
     in property <int> view-mode: 0;
     in property <bool> library-loading: false;
     in property <string> library-loading-message: "";
+    in property <bool> pointer-hidden: false;
 
     callback open-videos();
     callback open-folder();
@@ -85,18 +86,21 @@ export component Sidebar inherits Rectangle {
             IconButton {
                 size: 32px;
                 icon-size: 15px;
+                pointer-hidden: root.pointer-hidden;
                 icon: @image-url("icons/open-file.svg");
                 clicked => { open-videos(); }
             }
             IconButton {
                 size: 32px;
                 icon-size: 15px;
+                pointer-hidden: root.pointer-hidden;
                 icon: @image-url("icons/open-folder.svg");
                 clicked => { open-folder(); }
             }
             IconButton {
                 size: 32px;
                 icon-size: 15px;
+                pointer-hidden: root.pointer-hidden;
                 icon: @image-url("icons/clear.svg");
                 clicked => { clear-queue(); }
             }
@@ -137,6 +141,7 @@ export component Sidebar inherits Rectangle {
                         font-size: 13px;
                         single-line: true;
                         text: search-query;
+                        read-only: root.pointer-hidden;
                         vertical-alignment: center;
                         edited => { search-changed(self.text); }
                     }
@@ -156,12 +161,14 @@ export component Sidebar inherits Rectangle {
                 icon: @image-url("icons/shuffle.svg");
                 label: "Shuffle";
                 active: shuffle-on;
+                pointer-hidden: root.pointer-hidden;
                 clicked => { toggle-shuffle(); }
             }
             ToggleChip {
                 icon: @image-url("icons/loop.svg");
                 label: "Loop";
                 active: loop-on;
+                pointer-hidden: root.pointer-hidden;
                 clicked => { toggle-loop(); }
             }
             Rectangle { horizontal-stretch: 1; }
@@ -243,6 +250,8 @@ export component Sidebar inherits Rectangle {
                         }
 
                         row-touch := TouchArea {
+                            enabled: !root.pointer-hidden;
+                            mouse-cursor: root.pointer-hidden ? none : default;
                             pointer-event(event) => {
                                 if (event.kind == PointerEventKind.down && event.button == PointerEventButton.left) {
                                     if (can-reorder) {

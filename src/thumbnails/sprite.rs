@@ -3,6 +3,8 @@ use super::frame::{ExtractError, extract_frame, probe_duration};
 use super::hash::hash_video_file_cached;
 use image::{ImageBuffer, Rgba, RgbaImage};
 use serde::{Deserialize, Serialize};
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::path::Path;
 
 pub const THUMB_W: u32 = 160;
@@ -11,6 +13,45 @@ pub const COLUMNS: u32 = 10;
 pub const MAX_FRAMES: u32 = 600;
 pub const MIN_INTERVAL_SEC: f64 = 0.25;
 const CONCURRENCY: usize = 8;
+/// Decoded sprite sheets kept in memory so sidebar hover / scrub preview don't
+/// re-read and JPEG-decode the same multi-megabyte sheet on every interaction.
+const SPRITE_MEMORY_CACHE_MAX: usize = 6;
+
+struct SpriteMemoryCache {
+    entries: HashMap<String, (slint::Image, SpriteMeta)>,
+    order: Vec<String>,
+}
+
+impl SpriteMemoryCache {
+    fn get(&mut self, hash: &str) -> Option<(slint::Image, SpriteMeta)> {
+        if !self.entries.contains_key(hash) {
+            return None;
+        }
+        self.order.retain(|h| h != hash);
+        self.order.push(hash.to_string());
+        self.entries.get(hash).map(|(image, meta)| (image.clone(), meta.clone()))
+    }
+
+    fn insert(&mut self, hash: String, image: slint::Image, meta: SpriteMeta) {
+        if self.entries.contains_key(&hash) {
+            self.order.retain(|h| h != &hash);
+        } else if self.entries.len() >= SPRITE_MEMORY_CACHE_MAX {
+            if let Some(oldest) = self.order.first().cloned() {
+                self.order.remove(0);
+                self.entries.remove(&oldest);
+            }
+        }
+        self.order.push(hash.clone());
+        self.entries.insert(hash, (image, meta));
+    }
+}
+
+thread_local! {
+    static SPRITE_MEMORY_CACHE: RefCell<SpriteMemoryCache> = RefCell::new(SpriteMemoryCache {
+        entries: HashMap::new(),
+        order: Vec::new(),
+    });
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SpriteMeta {
@@ -123,14 +164,24 @@ pub fn generate_sprite(video_path: &Path) -> Result<(), SpriteError> {
 }
 
 /// Loads a previously cached sprite sheet + metadata for UI preview (progress-bar
-/// hover thumbnails). Returns `None` if the cache entry is missing or corrupt.
+/// hover thumbnails, sidebar list hover). Returns `None` if the cache entry is
+/// missing or corrupt. Decoded sheets are retained in a small in-memory LRU so
+/// repeated hovers don't hit disk.
 pub fn load_cached_sprite(hash: &str) -> Option<(slint::Image, SpriteMeta)> {
+    if let Some(hit) = SPRITE_MEMORY_CACHE.with(|cache| cache.borrow_mut().get(hash)) {
+        return Some(hit);
+    }
     if !cache::is_cached(hash) {
         return None;
     }
     let meta_json = std::fs::read_to_string(cache::meta_file(hash)).ok()?;
     let meta: SpriteMeta = serde_json::from_str(&meta_json).ok()?;
     let image = slint::Image::load_from_path(&cache::sprite_file(hash)).ok()?;
+    SPRITE_MEMORY_CACHE.with(|cache| {
+        cache
+            .borrow_mut()
+            .insert(hash.to_string(), image.clone(), meta.clone());
+    });
     Some((image, meta))
 }
 

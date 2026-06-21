@@ -840,6 +840,21 @@ fn wire_folder_scan(app: &AppWindow, scan_tx: std::sync::mpsc::Sender<Vec<librar
     });
 }
 
+/// Syncs the OS cursor with chrome auto-hide. Slint's TouchArea `mouse-cursor`
+/// only updates on pointer events; winit hides immediately when chrome fades.
+fn wire_chrome_cursor_hiding(app: &AppWindow) {
+    use slint::winit_030::WinitWindowAccessor;
+    let app_weak = app.as_weak();
+    app.on_chrome_visibility_changed(move |chrome_visible| {
+        let Some(app) = app_weak.upgrade() else {
+            return;
+        };
+        app.window().with_winit_window(|winit_window| {
+            winit_window.set_cursor_visible(chrome_visible);
+        });
+    });
+}
+
 /// Accepts OS file/folder drops onto the window via winit and forwards each
 /// path to `drop_tx` for batched import on the UI thread.
 fn wire_file_drop(app: &AppWindow, drop_tx: std::sync::mpsc::Sender<PathBuf>) {
@@ -1177,6 +1192,7 @@ fn main() {
     // plain `PathBuf`s plus that already-computed metadata.
     wire_folder_scan(&app, scan_tx.clone());
     wire_file_drop(&app, drop_tx);
+    wire_chrome_cursor_hiding(&app);
 
     {
         let mpv = Rc::clone(&mpv);

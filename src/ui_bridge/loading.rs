@@ -3,11 +3,53 @@ use crate::AppWindow;
 use crate::PlaylistItemData;
 use crate::library::{MediaKind, media_kind};
 use slint::{Model, VecModel};
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::path::Path;
 
 /// Below this row count the sidebar model is rebuilt in one shot.
 const PLAYLIST_SYNC_THRESHOLD: usize = 80;
 /// Rows filled per UI timer tick when rebuilding a large library list.
 const PLAYLIST_REBUILD_CHUNK: usize = 120;
+/// Decoded sidebar row poster images — avoids re-reading JPEGs on every filter/search rebuild.
+const POSTER_IMAGE_CACHE_MAX: usize = 512;
+
+thread_local! {
+    static POSTER_IMAGE_CACHE: RefCell<HashMap<String, slint::Image>> = RefCell::new(HashMap::new());
+}
+
+fn transparent_row_thumbnail() -> slint::Image {
+    let pixel_buffer =
+        slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(&[0, 0, 0, 0], 1, 1);
+    slint::Image::from_rgba8(pixel_buffer)
+}
+
+fn poster_image_for_hash(hash: &str) -> Option<slint::Image> {
+    POSTER_IMAGE_CACHE.with(|cache| {
+        if let Some(image) = cache.borrow().get(hash) {
+            return Some(image.clone());
+        }
+        let image = crate::thumbnails::load_cached_poster(hash)?;
+        let mut cache = cache.borrow_mut();
+        if cache.len() >= POSTER_IMAGE_CACHE_MAX {
+            if let Some(oldest) = cache.keys().next().cloned() {
+                cache.remove(&oldest);
+            }
+        }
+        cache.insert(hash.to_string(), image.clone());
+        Some(image)
+    })
+}
+
+fn playlist_row_thumbnail(path: &Path) -> slint::Image {
+    let Some(hash) = crate::thumbnails::hash::hash_video_file_cached(path).ok() else {
+        return transparent_row_thumbnail();
+    };
+    if !crate::thumbnails::cache::is_poster_cached(&hash) {
+        return transparent_row_thumbnail();
+    }
+    poster_image_for_hash(&hash).unwrap_or_else(transparent_row_thumbnail)
+}
 
 pub struct PlaylistRebuildJob {
     pub filtered: Vec<usize>,
@@ -88,7 +130,7 @@ pub fn schedule_playlist_rebuild(state: &mut AppState, model: &VecModel<Playlist
     if filtered.len() <= PLAYLIST_SYNC_THRESHOLD {
         let rows: Vec<PlaylistItemData> = filtered
             .iter()
-            .map(|&i| build_playlist_row(state, i, now_playing, show_sprite_status, false))
+            .map(|&i| build_playlist_row(state, i, now_playing, show_sprite_status, false, false))
             .collect();
         model.set_vec(rows);
         state.pending_playlist_rebuild = None;
@@ -97,7 +139,7 @@ pub fn schedule_playlist_rebuild(state: &mut AppState, model: &VecModel<Playlist
 
     let placeholders: Vec<PlaylistItemData> = filtered
         .iter()
-        .map(|&i| build_playlist_row(state, i, now_playing, show_sprite_status, true))
+        .map(|&i| build_playlist_row(state, i, now_playing, show_sprite_status, true, true))
         .collect();
     model.set_vec(placeholders);
 
@@ -150,6 +192,7 @@ pub fn tick_playlist_rebuild(
             now_playing,
             show_sprite_status,
             defer_sprite_status && !sprite_pass,
+            defer_sprite_status && !sprite_pass,
         );
         model.set_row_data(display_index, row);
     }
@@ -193,6 +236,41 @@ pub fn tick_playlist_rebuild(
 
 pub fn rebuild_playlist_model(state: &mut AppState, model: &VecModel<PlaylistItemData>) {
     schedule_playlist_rebuild(state, model);
+}
+
+/// Updates the sprite-status glyph for the row matching `hash` without rebuilding
+/// the whole sidebar model — used when a background sprite job finishes.
+pub(crate) fn patch_sprite_status_for_hash(
+    state: &mut AppState,
+    model: &VecModel<PlaylistItemData>,
+    hash: &str,
+    status: SpriteStatus,
+) {
+    let (filtered, _, show_sprite_status) = playlist_view(state);
+    let glyph = sprite_status_glyph(status);
+    for (display_index, &queue_index) in filtered.iter().enumerate() {
+        let item = match state.mode {
+            Mode::Video => state.queue.item(queue_index),
+            Mode::Image => state.image_queue.item(queue_index),
+            Mode::All => state.all_queue.item(queue_index),
+        };
+        let Some(item) = item else {
+            continue;
+        };
+        let path = item.path.clone();
+        let is_video = media_kind(&path) == MediaKind::Video;
+        if !show_sprite_status && !(state.mode == Mode::All && is_video) {
+            continue;
+        }
+        if state.sprite_hash_for(&path).as_deref() != Some(hash) {
+            continue;
+        }
+        let Some(mut row) = model.row_data(display_index) else {
+            continue;
+        };
+        row.sprite_status = glyph.into();
+        model.set_row_data(display_index, row);
+    }
 }
 
 /// Starts a deferred gallery rebuild once the current one (if any) finishes.
@@ -253,6 +331,7 @@ fn build_playlist_row(
     now_playing: Option<usize>,
     show_sprite_status: bool,
     defer_sprite_status: bool,
+    defer_thumbnail: bool,
 ) -> PlaylistItemData {
     let item = match state.mode {
         Mode::Video => state.queue.item(queue_index),
@@ -280,19 +359,10 @@ fn build_playlist_row(
         sprite_status: glyph.into(),
         file_size_text: size_text.into(),
         is_video,
-        thumbnail: playlist_row_thumbnail(&item.path),
+        thumbnail: if defer_thumbnail {
+            transparent_row_thumbnail()
+        } else {
+            playlist_row_thumbnail(&item.path)
+        },
     }
-}
-
-fn playlist_row_thumbnail(path: &std::path::Path) -> slint::Image {
-    if let Some(hash) = crate::thumbnails::hash::hash_video_file_cached(path).ok() {
-        if crate::thumbnails::cache::is_poster_cached(&hash) {
-            if let Some(image) = crate::thumbnails::load_cached_poster(&hash) {
-                return image;
-            }
-        }
-    }
-    let pixel_buffer =
-        slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(&[0, 0, 0, 0], 1, 1);
-    slint::Image::from_rgba8(pixel_buffer)
 }

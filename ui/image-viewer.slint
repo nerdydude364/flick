@@ -28,6 +28,7 @@ export component ImageViewer inherits Rectangle {
     in property <bool> show-single-image: true;
     in property <bool> gallery-loading: false;
     in property <string> gallery-loading-message: "";
+    in property <bool> pointer-hidden: false;
 
     callback navigate(int);
     callback open-images();
@@ -75,6 +76,7 @@ export component ImageViewer inherits Rectangle {
             y: 0;
             width: hit-width;
             height: hit-height;
+            mouse-cursor: root.pointer-hidden ? none : default;
             clicked => { open-images(); }
             double-clicked => { toggle-fullscreen(); }
         }
@@ -104,6 +106,7 @@ export component ImageViewer inherits Rectangle {
             y: 0;
             width: hit-width;
             height: hit-height;
+            mouse-cursor: root.pointer-hidden ? none : default;
             clicked => { toggle-playback(); }
             double-clicked => { toggle-fullscreen(); }
         }
@@ -187,6 +190,7 @@ export component ImageViewer inherits Rectangle {
             }
 
             TouchArea {
+                mouse-cursor: root.pointer-hidden ? none : default;
                 clicked => { gallery-item-clicked(i); }
             }
         }
