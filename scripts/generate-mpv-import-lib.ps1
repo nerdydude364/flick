@@ -19,7 +19,7 @@ $defFile = Join-Path $libDir "mpv.def"
 
 $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
 if (-not (Test-Path $vswhere)) {
-    throw "vswhere.exe not found — install Visual Studio Build Tools with C++ workload"
+    throw "vswhere.exe not found - install Visual Studio Build Tools with C++ workload"
 }
 
 $vsPath = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
