@@ -1,0 +1,52 @@
+import { Theme } from "theme.slint";
+
+export component LoadingSpinner inherits Rectangle {
+    in property <bool> running: true;
+
+    property <float> pulse: 1.0;
+
+    width: 28px;
+    height: 28px;
+    border-radius: self.width / 2;
+    border-width: 2px;
+    border-color: Theme.accent;
+    background: transparent;
+    opacity: pulse;
+
+    animate opacity { duration: 450ms; }
+
+    pulse-timer := Timer {
+        interval: 450ms;
+        running: root.running;
+        triggered => { root.pulse = root.pulse > 0.55 ? 0.3 : 1.0; }
+    }
+}
+
+export component LoadingOverlay inherits Rectangle {
+    in property <bool> show: false;
+    in property <string> message: "";
+
+    background: #000000a8;
+
+    if show: content := VerticalLayout {
+        width: parent.width;
+        height: parent.height;
+        alignment: center;
+        spacing: Theme.gap-sm;
+
+        HorizontalLayout {
+            alignment: center;
+            LoadingSpinner { running: show; }
+        }
+
+        if message != "": HorizontalLayout {
+            alignment: center;
+            Text {
+                text: message;
+                color: Theme.muted;
+                font-size: 13px;
+                horizontal-alignment: center;
+            }
+        }
+    }
+}

@@ -1,73 +1,223 @@
-use super::state::AppState;
+use super::state::{AppState, Mode};
 use crate::AppWindow;
+use crate::library::{MediaKind, media_kind};
+use libmpv2::Mpv;
 use slint::{Model, VecModel};
 use std::path::PathBuf;
 use std::sync::mpsc::Sender;
 
-/// Bounded worker count for background poster-thumbnail generation — mirrors
-/// the video sprite pipeline's own `CONCURRENCY`, just applied across
-/// independent images instead of one video's frames.
 const CONCURRENCY: usize = 8;
 
-/// One ready-to-load poster thumbnail's cache key, tagged with the grid
-/// generation it was requested for (see `AppState::gallery_generation`) and
-/// its position in that generation's `gallery_order`/`gallery_thumbnails`.
-/// Carries the content hash rather than a loaded `slint::Image` — `Image`
-/// isn't `Send`, so actually loading it from the cache has to happen back on
-/// the UI thread (see `apply_gallery_thumb`).
-pub type GalleryThumbResult = (u64, usize, String);
+pub type GalleryThumbResult = (u64, usize, Option<String>);
 
-/// Toggles between the single fullscreen image view and the grid overview —
-/// flips `gallery_open` and, when opening the grid, turns off any running
-/// slideshow (its timer would otherwise keep calling `show_image_at`, which
-/// forces `gallery_open` back to true every tick) and (re)populates the grid.
-pub fn toggle_gallery(
+/// Thumbnail models + channel used to populate the shared gallery grid.
+pub struct GalleryContext<'a> {
+    pub thumbnails: &'a VecModel<slint::Image>,
+    pub video_flags: &'a VecModel<bool>,
+    pub tx: &'a Sender<GalleryThumbResult>,
+}
+
+/// Whether opening the grid should always rebuild thumbnails or only when
+/// the filtered queue order drifted since the grid was last built.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GalleryReload {
+    IfStale,
+    Force,
+}
+
+pub fn return_to_gallery(
+    mpv: &Mpv,
     app: &AppWindow,
     state: &mut AppState,
-    gallery_model: &VecModel<slint::Image>,
-    gallery_tx: &Sender<GalleryThumbResult>,
-) {
-    state.gallery_open = !state.gallery_open;
+    gallery: &GalleryContext<'_>,
+) -> bool {
     if !state.gallery_open {
+        return false;
+    }
+    open_gallery_grid(mpv, app, state, gallery, GalleryReload::IfStale)
+}
+
+/// Back-compat alias — the UI only invokes this to leave single-item view.
+pub fn toggle_gallery(
+    mpv: &Mpv,
+    app: &AppWindow,
+    state: &mut AppState,
+    gallery: &GalleryContext<'_>,
+) -> bool {
+    return_to_gallery(mpv, app, state, gallery)
+}
+
+/// Show the thumbnail grid (no single-item view). Used after import and when
+/// switching modes with nothing selected yet.
+pub fn open_gallery_grid(
+    mpv: &Mpv,
+    app: &AppWindow,
+    state: &mut AppState,
+    gallery: &GalleryContext<'_>,
+    reload: GalleryReload,
+) -> bool {
+    prepare_gallery_view(mpv, app, state);
+
+    let needs_reload = reload == GalleryReload::Force
+        || !gallery_grid_is_current(state, gallery.thumbnails.row_count());
+
+    if !needs_reload {
+        sync_loading_ui(app, state);
+        return false;
+    }
+
+    prime_gallery_loading_state(state);
+    sync_loading_ui(app, state);
+    state.pending_gallery_reload = true;
+    true
+}
+
+/// Runs a deferred thumbnail rebuild queued by [`open_gallery_grid`].
+pub fn run_pending_gallery_reload(
+    state: &mut AppState,
+    app: &AppWindow,
+    gallery: &GalleryContext<'_>,
+) {
+    if !state.pending_gallery_reload {
+        return;
+    }
+    state.pending_gallery_reload = false;
+    load_gallery_thumbnails(state, gallery);
+    sync_loading_ui(app, state);
+}
+
+fn prepare_gallery_view(mpv: &Mpv, app: &AppWindow, state: &mut AppState) {
+    state.gallery_open = false;
+    if state.slideshow_on && (state.mode == Mode::Image || state.mode == Mode::All) {
         state.slideshow_on = false;
         app.set_slideshow_on(false);
         if let Some(timer) = &state.slideshow_timer {
             timer.stop();
         }
-        open_gallery(state, gallery_model, gallery_tx);
     }
-    app.set_gallery_open(state.gallery_open);
+    if state.mode == Mode::Video
+        || state.mode == Mode::Image
+        || (state.mode == Mode::All && state.all_current_is_video)
+    {
+        let _ = mpv.command("stop", &[]);
+        app.set_playing(false);
+    }
+    app.set_gallery_open(false);
 }
 
-/// Populates `gallery_order` and a same-length placeholder thumbnail model
-/// immediately (cheap, no I/O — every cell just shows its background color
-/// until filled in), then hands the actual file paths to a background
-/// thread for decoding. Ready thumbnails stream back individually over
-/// `gallery_tx` and get applied as they finish (see `apply_gallery_thumb`),
-/// so 1000+ multi-megapixel originals never block the UI thread or get held
-/// in memory at full resolution all at once — see `ensure_poster_cached`'s
-/// doc comment for the same reasoning applied per-image.
-fn open_gallery(
-    state: &mut AppState,
-    gallery_model: &VecModel<slint::Image>,
-    gallery_tx: &Sender<GalleryThumbResult>,
-) {
+fn current_gallery_order(state: &AppState) -> Vec<usize> {
+    match state.mode {
+        Mode::Video => state
+            .queue
+            .current_order(&state.search_query, state.shuffle_on),
+        Mode::Image => state
+            .image_queue
+            .current_order(&state.search_query, state.shuffle_on),
+        Mode::All => state
+            .all_queue
+            .current_order(&state.search_query, state.shuffle_on),
+    }
+}
+
+fn gallery_grid_is_current(state: &AppState, thumb_count: usize) -> bool {
+    if state.gallery_order.is_empty() || thumb_count == 0 {
+        return false;
+    }
+    if thumb_count != state.gallery_order.len() {
+        return false;
+    }
+    current_gallery_order(state) == state.gallery_order
+}
+
+fn prime_gallery_loading_state(state: &mut AppState) {
+    let Some((order, paths, _)) = gallery_source(state) else {
+        state.gallery_order.clear();
+        state.gallery_thumbs_pending = 0;
+        state.gallery_thumbs_loaded = 0;
+        return;
+    };
+    state.gallery_order = order;
+    state.gallery_thumbs_pending = paths.len();
+    state.gallery_thumbs_loaded = 0;
+}
+
+fn sync_loading_ui(app: &AppWindow, state: &AppState) {
+    super::loading::sync_loading_ui(app, state);
+}
+
+fn gallery_source(state: &AppState) -> Option<(Vec<usize>, Vec<PathBuf>, Vec<bool>)> {
+    let (order, paths, is_video): (Vec<usize>, Vec<PathBuf>, Vec<bool>) = match state.mode {
+        Mode::Video => {
+            let order = state
+                .queue
+                .current_order(&state.search_query, state.shuffle_on);
+            let paths: Vec<PathBuf> = order
+                .iter()
+                .filter_map(|&i| state.queue.item(i))
+                .map(|item| item.path.clone())
+                .collect();
+            let is_video = vec![true; paths.len()];
+            (order, paths, is_video)
+        }
+        Mode::Image => {
+            let order = state
+                .image_queue
+                .current_order(&state.search_query, state.shuffle_on);
+            let paths: Vec<PathBuf> = order
+                .iter()
+                .filter_map(|&i| state.image_queue.item(i))
+                .map(|item| item.path.clone())
+                .collect();
+            let is_video = vec![false; paths.len()];
+            (order, paths, is_video)
+        }
+        Mode::All => {
+            let order = state
+                .all_queue
+                .current_order(&state.search_query, state.shuffle_on);
+            let paths: Vec<PathBuf> = order
+                .iter()
+                .filter_map(|&i| state.all_queue.item(i))
+                .map(|item| item.path.clone())
+                .collect();
+            let is_video: Vec<bool> = paths
+                .iter()
+                .map(|p| media_kind(p) == MediaKind::Video)
+                .collect();
+            (order, paths, is_video)
+        }
+    };
+    if paths.is_empty() {
+        None
+    } else {
+        Some((order, paths, is_video))
+    }
+}
+
+fn load_gallery_thumbnails(state: &mut AppState, gallery: &GalleryContext<'_>) {
+    let Some((order, paths, is_video)) = gallery_source(state) else {
+        state.gallery_order.clear();
+        state.gallery_thumbs_pending = 0;
+        state.gallery_thumbs_loaded = 0;
+        gallery.thumbnails.set_vec(Vec::new());
+        gallery.video_flags.set_vec(Vec::new());
+        return;
+    };
+
     state.gallery_generation += 1;
     let generation = state.gallery_generation;
-
-    let order = state
-        .image_queue
-        .current_order(&state.search_query, state.shuffle_on);
-    let paths: Vec<PathBuf> = order
-        .iter()
-        .filter_map(|&i| state.image_queue.item(i))
-        .map(|item| item.path.clone())
-        .collect();
     state.gallery_order = order;
+    state.gallery_thumbs_pending = paths.len();
+    state.gallery_thumbs_loaded = 0;
 
-    gallery_model.set_vec(vec![slint::Image::default(); paths.len()]);
+    if gallery.thumbnails.row_count() != paths.len() {
+        gallery
+            .thumbnails
+            .set_vec(vec![slint::Image::default(); paths.len()]);
+    }
+    gallery.video_flags.set_vec(is_video.clone());
 
-    let tx = gallery_tx.clone();
+    let tx = gallery.tx.clone();
     std::thread::spawn(move || {
         for batch_start in (0..paths.len()).step_by(CONCURRENCY) {
             let batch_end = (batch_start + CONCURRENCY).min(paths.len());
@@ -75,10 +225,14 @@ fn open_gallery(
                 for (offset, path) in paths[batch_start..batch_end].iter().enumerate() {
                     let tx = tx.clone();
                     let pos = batch_start + offset;
+                    let is_vid = is_video[pos];
                     scope.spawn(move || {
-                        if let Some(hash) = crate::thumbnails::ensure_poster_cached(path) {
-                            let _ = tx.send((generation, pos, hash));
-                        }
+                        let hash = if is_vid {
+                            crate::thumbnails::ensure_video_poster_cached(path)
+                        } else {
+                            crate::thumbnails::ensure_poster_cached(path)
+                        };
+                        let _ = tx.send((generation, pos, hash));
                     });
                 }
             });
@@ -86,13 +240,9 @@ fn open_gallery(
     });
 }
 
-/// Applies one ready poster thumbnail (from the channel `open_gallery`'s
-/// worker thread sends to) by loading it from the cache right here on the UI
-/// thread — drops it if the grid has since moved on to a newer generation
-/// (closed/reopened, search/shuffle changed) rather than writing into what's
-/// now the wrong row.
 pub fn apply_gallery_thumb(
-    state: &AppState,
+    state: &mut AppState,
+    app: &AppWindow,
     gallery_model: &VecModel<slint::Image>,
     result: GalleryThumbResult,
 ) {
@@ -100,7 +250,13 @@ pub fn apply_gallery_thumb(
     if generation != state.gallery_generation || pos >= gallery_model.row_count() {
         return;
     }
-    if let Some(image) = crate::thumbnails::load_cached_poster(&hash) {
+    if let Some(hash) = hash
+        && let Some(image) = crate::thumbnails::load_cached_poster(&hash)
+    {
         gallery_model.set_row_data(pos, image);
     }
+    if state.gallery_thumbs_loaded < state.gallery_thumbs_pending {
+        state.gallery_thumbs_loaded += 1;
+    }
+    super::loading::sync_loading_ui(app, state);
 }

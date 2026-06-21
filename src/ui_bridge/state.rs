@@ -28,12 +28,17 @@ pub enum AbLoopState {
 pub enum Mode {
     Video,
     Image,
+    All,
 }
 
 pub struct AppState {
     pub queue: Queue,
     pub image_queue: Queue,
+    pub all_queue: Queue,
     pub mode: Mode,
+    /// When `mode == All`, whether the currently presented item is a video
+    /// (drives mpv vs image overlay visibility in the UI).
+    pub all_current_is_video: bool,
     /// Grid (false) vs fullscreen single-image (true) — separate from the
     /// window's OS-level fullscreen state, matching the original's
     /// `subMode` ('grid'/'gallery') vs `isFullscreen` distinction.
@@ -69,6 +74,14 @@ pub struct AppState {
     /// hash -> status. `Done` is permanent once observed, matching the
     /// original's `spriteStatusCache` ("only permanent done state is cached").
     pub(crate) sprite_status: HashMap<String, SpriteStatus>,
+    /// Sidebar list being filled incrementally after a large import.
+    pub pending_playlist_rebuild: Option<super::loading::PlaylistRebuildJob>,
+    pub library_loading: bool,
+    pub library_loading_message: String,
+    pub gallery_thumbs_pending: usize,
+    pub gallery_thumbs_loaded: usize,
+    /// Heavy thumbnail rebuild deferred until after the grid shell paints.
+    pub pending_gallery_reload: bool,
 }
 
 impl AppState {
@@ -76,7 +89,9 @@ impl AppState {
         Self {
             queue: Queue::new(),
             image_queue: Queue::new(),
-            mode: Mode::Video,
+            all_queue: Queue::new(),
+            mode: Mode::All,
+            all_current_is_video: false,
             gallery_open: false,
             gallery_order: Vec::new(),
             gallery_generation: 0,
@@ -90,6 +105,12 @@ impl AppState {
             gif_animation: None,
             sprite_hash: HashMap::new(),
             sprite_status: HashMap::new(),
+            pending_playlist_rebuild: None,
+            library_loading: false,
+            library_loading_message: String::new(),
+            gallery_thumbs_pending: 0,
+            gallery_thumbs_loaded: 0,
+            pending_gallery_reload: false,
         }
     }
 
@@ -132,5 +153,13 @@ impl AppState {
             .get(&hash)
             .copied()
             .unwrap_or(SpriteStatus::NotStarted)
+    }
+
+    pub fn active_queue(&self) -> &Queue {
+        match self.mode {
+            Mode::Video => &self.queue,
+            Mode::Image => &self.image_queue,
+            Mode::All => &self.all_queue,
+        }
     }
 }

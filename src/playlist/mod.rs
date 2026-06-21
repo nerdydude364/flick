@@ -135,6 +135,14 @@ impl Queue {
         self.now_playing = None;
     }
 
+    pub fn index_of_path(&self, path: &PathBuf) -> Option<usize> {
+        self.items.iter().position(|item| item.path == *path)
+    }
+
+    pub fn remove_by_path(&mut self, path: &PathBuf) -> Option<RemoveOutcome> {
+        self.index_of_path(path).map(|i| self.remove_at(i))
+    }
+
     /// Resets the shuffle order back to identity (queue) order — port of
     /// `playOrder = queue.map((_, i) => i)` in `toggleShuffle()`'s off branch.
     pub fn reset_play_order(&mut self) {

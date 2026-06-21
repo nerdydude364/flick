@@ -1,6 +1,7 @@
 import { ListView } from "std-widgets.slint";
 import { Theme } from "theme.slint";
 import { IconButton, ToggleChip, EqBars, SpriteFramePreview } from "components.slint";
+import { LoadingSpinner } from "loading-overlay.slint";
 
 export struct PlaylistItemData {
     queue-index: int,
@@ -8,6 +9,7 @@ export struct PlaylistItemData {
     playing: bool,
     sprite-status: string,
     file-size-text: string,
+    is-video: bool,
 }
 
 export component Sidebar inherits Rectangle {
@@ -15,7 +17,9 @@ export component Sidebar inherits Rectangle {
     in property <bool> shuffle-on;
     in property <bool> loop-on;
     in property <string> search-query: "";
-    in property <bool> image-mode: false;
+    in property <int> view-mode: 0;
+    in property <bool> library-loading: false;
+    in property <string> library-loading-message: "";
 
     callback open-videos();
     callback open-folder();
@@ -71,6 +75,11 @@ export component Sidebar inherits Rectangle {
                 letter-spacing: 1.2px;
                 vertical-alignment: center;
             }
+            if library-loading: HorizontalLayout {
+                spacing: Theme.gap-xs;
+                LoadingSpinner { running: library-loading; }
+            }
+
             Rectangle { horizontal-stretch: 1; }
             IconButton {
                 size: 32px;
@@ -204,7 +213,9 @@ export component Sidebar inherits Rectangle {
                                 border-radius: Theme.radius-sm;
                                 background: Theme.surface-3;
                                 Image {
-                                    source: image-mode ? @image-url("icons/image-file.svg") : @image-url("icons/video-file.svg");
+                                    source: (view-mode == 0 || (view-mode == 2 && entry.is-video))
+                                        ? @image-url("icons/video-file.svg")
+                                        : @image-url("icons/image-file.svg");
                                     width: 15px;
                                     height: 15px;
                                     colorize: entry.playing ? Theme.accent : Theme.muted;
@@ -267,7 +278,7 @@ export component Sidebar inherits Rectangle {
                                 }
                             }
                             changed has-hover => {
-                                if (self.has-hover && !image-mode && !dragging && entry.sprite-status == "✓") {
+                                if (self.has-hover && view-mode != 1 && !dragging && entry.sprite-status == "✓") {
                                     hover-display-index = i;
                                     hover-queue-index = entry.queue-index;
                                     item-hovered(entry.queue-index, i);
@@ -313,7 +324,7 @@ export component Sidebar inherits Rectangle {
     }
 
     // Outside the layout so absolute x/y are relative to the sidebar edge.
-    if preview-visible && hover-display-index >= 0 && !image-mode: Rectangle {
+    if preview-visible && hover-display-index >= 0 && view-mode != 1: Rectangle {
         x: -preview-thumb-w * 1px - 8px;
         y: list-area.y + 2px + hover-display-index * row-height - list-scroll-y
             + (row-height - preview-thumb-h * 1px) / 2;

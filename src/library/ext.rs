@@ -20,6 +20,20 @@ pub fn is_image_file(path: &Path) -> bool {
     ext_lower(path).is_some_and(|e| IMAGE_EXTS.contains(&e.as_str()))
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MediaKind {
+    Video,
+    Image,
+}
+
+pub fn media_kind(path: &Path) -> MediaKind {
+    if is_video_file(path) {
+        MediaKind::Video
+    } else {
+        MediaKind::Image
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

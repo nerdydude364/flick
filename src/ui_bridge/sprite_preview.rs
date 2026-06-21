@@ -6,6 +6,20 @@ use slint::VecModel;
 use std::cell::RefCell;
 use std::rc::Rc;
 
+fn current_video_path(state: &AppState) -> Option<std::path::PathBuf> {
+    match state.mode {
+        Mode::Video => state
+            .queue
+            .now_playing()
+            .and_then(|index| state.queue.item(index).map(|item| item.path.clone())),
+        Mode::All if state.all_current_is_video => state
+            .all_queue
+            .now_playing()
+            .and_then(|index| state.all_queue.item(index).map(|item| item.path.clone())),
+        _ => None,
+    }
+}
+
 /// Clears progress-bar scrub preview state (no sprite sheet loaded).
 pub fn clear_sprite_preview(app: &AppWindow) {
     app.set_sprite_ready(false);
@@ -16,11 +30,7 @@ pub fn clear_sprite_preview(app: &AppWindow) {
 /// Pushes the cached sprite sheet for the currently playing video (if any)
 /// into the AppWindow properties that drive the progress-bar hover preview.
 pub fn sync_sprite_preview(app: &AppWindow, state: &mut AppState) {
-    let path = state
-        .queue
-        .now_playing()
-        .and_then(|index| state.queue.item(index).map(|item| item.path.clone()));
-    let Some(path) = path else {
+    let Some(path) = current_video_path(state) else {
         clear_sprite_preview(app);
         return;
     };
@@ -90,11 +100,18 @@ pub fn hide_list_sprite_preview(app: &AppWindow) {
 /// Shows a random frame from the cached sprite for `queue_index` — port of
 /// `renderSpritePreview` in renderer/app.js (`Math.random() * frame_count`).
 pub fn show_list_sprite_preview(app: &AppWindow, state: &mut AppState, queue_index: usize) {
-    if state.mode != Mode::Video {
+    if state.mode != Mode::Video && state.mode != Mode::All {
         hide_list_sprite_preview(app);
         return;
     }
-    let path = state.queue.item(queue_index).map(|item| item.path.clone());
+    let path = match state.mode {
+        Mode::Video => state.queue.item(queue_index).map(|item| item.path.clone()),
+        Mode::All => state
+            .all_queue
+            .item(queue_index)
+            .map(|item| item.path.clone()),
+        Mode::Image => None,
+    };
     let Some(path) = path else {
         hide_list_sprite_preview(app);
         return;
@@ -139,7 +156,20 @@ pub fn schedule_sprite_generation(
     sprite_tx: std::sync::mpsc::Sender<(String, bool)>,
     index: usize,
 ) {
-    let Some(path) = state.borrow().queue.item(index).map(|it| it.path.clone()) else {
+    let state_ref = state.borrow();
+    let (now_playing, path) = match state_ref.mode {
+        Mode::Video => (
+            state_ref.queue.now_playing(),
+            state_ref.queue.item(index).map(|it| it.path.clone()),
+        ),
+        Mode::All => (
+            state_ref.all_queue.now_playing(),
+            state_ref.all_queue.item(index).map(|it| it.path.clone()),
+        ),
+        Mode::Image => (None, None),
+    };
+    drop(state_ref);
+    let Some(path) = path else {
         return;
     };
     // Folder scans can put images in this queue too (Phase 5 will give them
@@ -160,7 +190,7 @@ pub fn schedule_sprite_generation(
             let mut state_ref = state.borrow_mut();
             // Bail if the user has already switched to something else since this
             // was scheduled — matches the original's `if (nowPlaying !== capturedIndex) return`.
-            if state_ref.queue.now_playing() != Some(index) {
+            if now_playing != Some(index) {
                 return;
             }
             let status = state_ref.sprite_status_for(&path);

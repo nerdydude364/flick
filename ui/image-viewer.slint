@@ -1,4 +1,5 @@
 import { Theme } from "theme.slint";
+import { LoadingOverlay } from "loading-overlay.slint";
 
 export component ImageViewer inherits Rectangle {
     in property <image> current-image;
@@ -21,7 +22,11 @@ export component ImageViewer inherits Rectangle {
     // showing image within that list (-1 if none), used only to outline the
     // current cell and to scroll it into view when the grid opens.
     in property <[image]> gallery-thumbnails: [];
+    in property <[bool]> gallery-is-video: [];
     in property <int> gallery-current-index: -1;
+    in property <bool> show-single-image: true;
+    in property <bool> gallery-loading: false;
+    in property <string> gallery-loading-message: "";
 
     callback navigate(int);
     callback open-images();
@@ -57,7 +62,7 @@ export component ImageViewer inherits Rectangle {
                 opacity: 0.28;
             }
             Text {
-                text: "Drop images here or click Open Images";
+                text: "Drop media here or click Open";
                 color: Theme.muted-2;
                 font-size: 13px;
                 horizontal-alignment: center;
@@ -74,7 +79,7 @@ export component ImageViewer inherits Rectangle {
         }
     }
 
-    if has-images && gallery-open: Rectangle {
+    if has-images && gallery-open && show-single-image: Rectangle {
         x: 0;
         y: 0;
         width: 100%;
@@ -143,9 +148,35 @@ export component ImageViewer inherits Rectangle {
                 image-fit: cover;
             }
 
+            if i < gallery-is-video.length && gallery-is-video[i]: Rectangle {
+                x: 4px;
+                y: 4px;
+                width: 22px;
+                height: 22px;
+                border-radius: 4px;
+                background: #000000aa;
+                Image {
+                    source: @image-url("icons/video-file.svg");
+                    width: 13px;
+                    height: 13px;
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    colorize: white;
+                }
+            }
+
             TouchArea {
                 clicked => { gallery-item-clicked(i); }
             }
+        }
+
+        if gallery-loading: LoadingOverlay {
+            x: 0;
+            y: 0;
+            width: hit-width;
+            height: hit-height;
+            show: true;
+            message: gallery-loading-message;
         }
     }
 }

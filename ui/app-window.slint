@@ -60,16 +60,54 @@ export component AppWindow inherits Window {
     in property <int> list-preview-thumb-w: 160;
     in property <int> list-preview-thumb-h: 90;
 
-    in property <bool> image-mode: false;
+    in property <int> view-mode: 0;
+    in property <bool> current-is-video: false;
     in property <bool> gallery-open: false;
     in property <image> current-image;
     in property <string> image-counter-text: "";
     in property <int> image-position: 0;
     in property <int> image-total: 0;
+    in property <string> video-counter-text: "";
+    in property <int> video-position: 0;
+    in property <int> video-total: 0;
     in property <bool> has-images: false;
+    in property <bool> has-videos: false;
+    in property <bool> has-media: false;
+    in property <string> media-counter-text: "";
+    in property <int> media-position: 0;
+    in property <int> media-total: 0;
     in property <bool> slideshow-on: false;
     in property <string> slideshow-duration-text: "8s";
     in property <[image]> gallery-thumbnails: [];
+    in property <[bool]> gallery-is-video: [];
+    in property <bool> library-loading: false;
+    in property <string> library-loading-message: "";
+    in property <bool> gallery-loading: false;
+
+    property <bool> image-mode: view-mode == 1;
+    property <bool> all-mode: view-mode == 2;
+    property <bool> video-mode: view-mode == 0;
+    property <bool> show-image-viewer: image-mode || (all-mode && !(current-is-video && gallery-open)) || (video-mode && !gallery-open);
+    property <bool> show-video-canvas: (video-mode && gallery-open) || (all-mode && current-is-video && gallery-open);
+    property <string> counter-text: all-mode ? media-counter-text : (video-mode ? video-counter-text : image-counter-text);
+    property <int> counter-position: all-mode ? media-position : (video-mode ? video-position : image-position);
+    property <int> counter-total: all-mode ? media-total : (video-mode ? video-total : image-total);
+    property <bool> has-library-items: all-mode ? has-media : (video-mode ? has-videos : has-images);
+    // Single-item view with mpv playback (video mode, or a video in All mode).
+    property <bool> show-video-transport: (video-mode && gallery-open) || (all-mode && current-is-video && gallery-open);
+    // Single-item image view (image mode, or an image in All mode).
+    property <bool> show-image-transport: (image-mode && gallery-open) || (all-mode && !current-is-video && gallery-open);
+    property <bool> show-video-tools: show-video-transport;
+    property <bool> show-image-tools: show-image-transport;
+    // Slideshow prev/play/next — image-only; All-mode videos use mpv transport instead.
+    property <bool> slideshow-transport: show-image-transport;
+    // Prev/next walks the active mode's queue (All uses navigate-image → Rust all_queue).
+    property <bool> queue-navigate-transport: all-mode && gallery-open;
+    property <bool> show-video-scrub: show-video-transport && !slideshow-on;
+    // Thumbnail grid, or loading into it — chrome is hidden so the grid can fill the window.
+    property <bool> gallery-grid-view: !gallery-open && (has-library-items || library-loading);
+    property <length> chrome-sidebar-w: gallery-grid-view ? 0px : (sidebar-open ? Theme.sidebar-width : 0px);
+    property <length> chrome-bottom-h: gallery-grid-view ? 0px : bottom-h;
 
     // Manual, persistent drawer state (toggled via the handle next to the
     // sidebar) — independent of `chrome-visible` below.
@@ -96,7 +134,7 @@ export component AppWindow inherits Window {
     in-out property <float> image-zoom: 100;
     in-out property <float> image-rotation-deg: 0;
 
-    callback toggle-mode();
+    callback set-view-mode(int);
     callback navigate-image(int /* delta: -1 or 1 */);
     callback open-images();
     callback toggle-slideshow();
@@ -158,39 +196,33 @@ export component AppWindow inherits Window {
         // above (this TouchArea fully overlaps it over the canvas, so without
         // its own handler here double-clicks on the video never reach that
         // outer one). Image mode handles clicks in ImageViewer instead.
-        if !image-mode: TouchArea {
+        if show-video-canvas: TouchArea {
             x: 0;
             y: 0;
-            width: parent.width - sidebar.width;
-            height: parent.height - bottom-h;
+            width: parent.width - chrome-sidebar-w;
+            height: parent.height - chrome-bottom-h;
             clicked => { toggle-play(); key-handler.focus(); }
             double-clicked => { toggle-fullscreen(); key-handler.focus(); }
         }
 
-        // Declared before the sidebar/drawer chrome below (not after, unlike
-        // its position in the file previously) so those paint on *top* of it
-        // — ImageViewer paints an opaque black background, which otherwise
-        // covered the drawer handle entirely whenever image-mode was on.
-        //
-        // Sized to the full window (like the mpv video underlay, which
-        // always covers the whole canvas regardless of chrome) so the image
-        // itself renders edge-to-edge behind the sidebar/bottom bars; only
-        // its click handling stays confined to `hit-width`/`hit-height`, matching
-        // the video click layer above.
-        if image-mode: image-viewer := ImageViewer {
+        if show-image-viewer: image-viewer := ImageViewer {
             x: 0;
             y: 0;
             width: 100%;
             height: 100%;
-            hit-width: parent.width - sidebar.width;
-            hit-height: parent.height - bottom-h;
-            has-images: has-images;
+            hit-width: parent.width - chrome-sidebar-w;
+            hit-height: parent.height - chrome-bottom-h;
+            has-images: has-library-items;
             gallery-open: gallery-open;
+            show-single-image: view-mode == 1 || !current-is-video;
             current-image: current-image;
             zoom-percent: image-zoom;
             rotation-deg: image-rotation-deg;
             gallery-thumbnails: gallery-thumbnails;
-            gallery-current-index: image-position - 1;
+            gallery-is-video: gallery-is-video;
+            gallery-loading: gallery-loading;
+            gallery-loading-message: library-loading-message;
+            gallery-current-index: counter-position - 1;
             navigate(delta) => { navigate-image(delta); key-handler.focus(); }
             open-images => { open-images(); }
             toggle-fullscreen => { toggle-fullscreen(); key-handler.focus(); }
@@ -201,14 +233,16 @@ export component AppWindow inherits Window {
         sidebar := Sidebar {
             x: parent.width - self.width;
             y: 0;
-            width: sidebar-open ? Theme.sidebar-width : 0px;
+            width: chrome-sidebar-w;
             height: 100%;
-            opacity: chrome-visible ? 1.0 : 0.0;
+            opacity: (chrome-visible && !gallery-grid-view) ? 1.0 : 0.0;
+            library-loading: library-loading;
+            library-loading-message: library-loading-message;
             items: playlist-items;
             shuffle-on: shuffle-on;
             loop-on: loop-on;
             search-query: search-query;
-            image-mode: image-mode;
+            view-mode: view-mode;
             preview-image: list-preview-image;
             preview-visible: list-preview-visible;
             preview-col: list-preview-col;
@@ -222,10 +256,8 @@ export component AppWindow inherits Window {
             animate opacity { duration: 200ms; }
         }
 
-        // Drawer handle: tracks the sidebar's current left edge (so it
-        // slides along with the open/close animation) and stays reachable
-        // even when the sidebar is fully collapsed to 0 width.
-        IconButton {
+        // Drawer handle — hidden in gallery grid so the grid can use full width.
+        if !gallery-grid-view: IconButton {
             x: sidebar.x - self.width - 4px;
             y: 16px;
             size: 32px;
@@ -256,40 +288,55 @@ export component AppWindow inherits Window {
 
                 Rectangle {
                     height: 26px;
+                    min-width: all-label.preferred-width + 28px;
+                    border-radius: self.height / 2;
+                    background: view-mode == 2 ? Theme.accent-soft : transparent;
+
+                    all-label := Text {
+                        text: "All";
+                        font-size: 13px;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                        color: view-mode == 2 ? Theme.accent : Theme.muted;
+                    }
+                    TouchArea { clicked => { if (view-mode != 2) { set-view-mode(2); } key-handler.focus(); } }
+                }
+                Rectangle {
+                    height: 26px;
                     min-width: video-label.preferred-width + 28px;
                     border-radius: self.height / 2;
-                    background: !image-mode ? Theme.accent-soft : transparent;
+                    background: view-mode == 0 ? Theme.accent-soft : transparent;
 
                     video-label := Text {
                         text: "Video";
                         font-size: 13px;
                         horizontal-alignment: center;
                         vertical-alignment: center;
-                        color: !image-mode ? Theme.accent : Theme.muted;
+                        color: view-mode == 0 ? Theme.accent : Theme.muted;
                     }
-                    TouchArea { clicked => { if (image-mode) { toggle-mode(); } key-handler.focus(); } }
+                    TouchArea { clicked => { if (view-mode != 0) { set-view-mode(0); } key-handler.focus(); } }
                 }
                 Rectangle {
                     height: 26px;
                     min-width: image-label.preferred-width + 28px;
                     border-radius: self.height / 2;
-                    background: image-mode ? Theme.accent-soft : transparent;
+                    background: view-mode == 1 ? Theme.accent-soft : transparent;
 
                     image-label := Text {
                         text: "Image";
                         font-size: 13px;
                         horizontal-alignment: center;
                         vertical-alignment: center;
-                        color: image-mode ? Theme.accent : Theme.muted;
+                        color: view-mode == 1 ? Theme.accent : Theme.muted;
                     }
-                    TouchArea { clicked => { if (!image-mode) { toggle-mode(); } key-handler.focus(); } }
+                    TouchArea { clicked => { if (view-mode != 1) { set-view-mode(1); } key-handler.focus(); } }
                 }
             }
         }
 
         // Fullscreen theater chrome: one tall gradient behind both bottom rows so
         // controls sit inside opaque black rather than spilling above a short bar.
-        if is-fullscreen: Rectangle {
+        if is-fullscreen && !gallery-grid-view: Rectangle {
             x: 0;
             y: parent.height - bottom-h;
             width: 100%;
@@ -300,7 +347,7 @@ export component AppWindow inherits Window {
         }
 
         // ---- scrub row: full width, spans under canvas *and* sidebar ----
-        Rectangle {
+        if !gallery-grid-view: Rectangle {
             x: 0;
             y: parent.height - bottom-h;
             width: 100%;
@@ -311,7 +358,7 @@ export component AppWindow inherits Window {
 
             TouchArea { }
 
-            if !image-mode: HorizontalLayout {
+            if show-video-scrub: HorizontalLayout {
                 padding-left: 16px;
                 padding-right: 16px;
                 padding-top: is-fullscreen ? 16px : 10px;
@@ -351,30 +398,35 @@ export component AppWindow inherits Window {
                 }
             }
 
-            if image-mode: HorizontalLayout {
+            if show-image-transport && !show-video-scrub: HorizontalLayout {
                 alignment: center;
                 spacing: 10px;
-                Text { text: "Image"; color: Theme.muted; font-size: 12px; vertical-alignment: center; }
                 Text {
-                    text: has-images ? image-counter-text : "—";
+                    text: all-mode ? "All" : "Image";
                     color: Theme.muted;
                     font-size: 12px;
                     vertical-alignment: center;
                 }
-                if has-images && image-total > 0 && image-total <= 15: HorizontalLayout {
+                Text {
+                    text: has-library-items ? counter-text : "—";
+                    color: Theme.muted;
+                    font-size: 12px;
+                    vertical-alignment: center;
+                }
+                if has-library-items && counter-total > 0 && counter-total <= 15: HorizontalLayout {
                     spacing: 5px;
-                    for dot[i] in image-total: Rectangle {
+                    for dot[i] in counter-total: Rectangle {
                         width: 5px;
                         height: 5px;
                         border-radius: 2.5px;
-                        background: i == (image-position - 1) ? Theme.accent : Theme.surface-3;
+                        background: i == (counter-position - 1) ? Theme.accent : Theme.surface-3;
                     }
                 }
             }
         }
 
         // ---- transport row: full width ----
-        Rectangle {
+        if !gallery-grid-view: Rectangle {
             x: 0;
             y: parent.height - transport-h;
             width: 100%;
@@ -392,7 +444,14 @@ export component AppWindow inherits Window {
                 padding-bottom: is-fullscreen ? (transport-h - Theme.control) / 2 : 12px;
                 spacing: 10px;
 
-                if !image-mode: HorizontalLayout {
+                // Global control: leave single-item view and return to the grid
+                // for whichever view mode is active.
+                if !gallery-grid-view && gallery-open: IconButton {
+                    icon: @image-url("icons/grid.svg");
+                    clicked => { toggle-gallery(); key-handler.focus(); }
+                }
+
+                if show-video-tools: HorizontalLayout {
                     spacing: 8px;
                     width: 250px;
                     IconButton {
@@ -439,13 +498,8 @@ export component AppWindow inherits Window {
                     }
                 }
 
-                if image-mode: HorizontalLayout {
+                if show-image-tools: HorizontalLayout {
                     spacing: 8px;
-                    IconButton {
-                        icon: @image-url("icons/grid.svg");
-                        active: !gallery-open;
-                        clicked => { toggle-gallery(); key-handler.focus(); }
-                    }
                     IconButton {
                         icon: @image-url("icons/zoom-out.svg");
                         clicked => {
@@ -491,21 +545,33 @@ export component AppWindow inherits Window {
                             size: Theme.control;
                             icon-size: 18px;
                             icon: @image-url("icons/prev.svg");
-                            clicked => { if (image-mode) { navigate-image(-1); } else { previous-track(); } key-handler.focus(); }
+                            clicked => {
+                                if (slideshow-transport || queue-navigate-transport) { navigate-image(-1); }
+                                else { previous-track(); }
+                                key-handler.focus();
+                            }
                         }
                         IconButton {
                             size: Theme.control;
                             icon-size: 18px;
                             filled: true;
-                            enabled: !(image-mode && !gallery-open);
-                            icon: (image-mode ? slideshow-on : playing) ? @image-url("icons/pause.svg") : @image-url("icons/play.svg");
-                            clicked => { if (image-mode) { toggle-slideshow(); } else { toggle-play(); } key-handler.focus(); }
+                            enabled: !(slideshow-transport && !gallery-open);
+                            icon: (slideshow-transport ? slideshow-on : playing) ? @image-url("icons/pause.svg") : @image-url("icons/play.svg");
+                            clicked => {
+                                if (slideshow-transport) { toggle-slideshow(); }
+                                else { toggle-play(); }
+                                key-handler.focus();
+                            }
                         }
                         IconButton {
                             size: Theme.control;
                             icon-size: 18px;
                             icon: @image-url("icons/next.svg");
-                            clicked => { if (image-mode) { navigate-image(1); } else { next-track(); } key-handler.focus(); }
+                            clicked => {
+                                if (slideshow-transport || queue-navigate-transport) { navigate-image(1); }
+                                else { next-track(); }
+                                key-handler.focus();
+                            }
                         }
                     }
                 }
@@ -518,7 +584,7 @@ export component AppWindow inherits Window {
                     HorizontalLayout {
                         spacing: 4px;
                         width: 200px;
-                        if !image-mode: IconButton {
+                        if show-video-scrub: IconButton {
                             icon: volume-value <= 0 ? @image-url("icons/volume-mute.svg") : @image-url("icons/volume.svg");
                             clicked => {
                                 if (volume-value <= 0) {
@@ -531,13 +597,13 @@ export component AppWindow inherits Window {
                                 key-handler.focus();
                             }
                         }
-                        if !image-mode: TrackSlider {
+                        if show-video-scrub: TrackSlider {
                             hit-h: Theme.control;
                             horizontal-stretch: 1;
                             value: volume-value / 100.0;
                             changed(v) => { volume-value = v * 100.0; volume-changed(volume-value); }
                         }
-                        if slideshow-on: HorizontalLayout{
+                        if slideshow-on && slideshow-transport: HorizontalLayout{
                             spacing: 10px;
                             TrackSlider {
                                 hit-h: Theme.control;
@@ -563,7 +629,7 @@ export component AppWindow inherits Window {
         if error-message != "": Rectangle {
             x: 0;
             y: 0;
-            width: parent.width - sidebar.width;
+            width: parent.width - chrome-sidebar-w;
             height: 40px;
             background: #7f1d1de6;
 
@@ -592,16 +658,17 @@ export component AppWindow inherits Window {
                 hide-timer.restart();
                 if (event.text == Key.Escape) {
                     if (is-fullscreen) { toggle-fullscreen(); }
+                    else if (gallery-open) { toggle-gallery(); }
                     dismiss-error();
                     accept
                 } else if (event.text == " ") {
-                    if (image-mode) { toggle-slideshow(); } else { toggle-play(); }
+                    if (slideshow-transport) { toggle-slideshow(); } else { toggle-play(); }
                     accept
                 } else if (event.text == Key.LeftArrow || event.text == "[") {
-                    if (image-mode) { navigate-image(-1); } else { previous-track(); }
+                    if (slideshow-transport || queue-navigate-transport) { navigate-image(-1); } else { previous-track(); }
                     accept
                 } else if (event.text == Key.RightArrow || event.text == "]") {
-                    if (image-mode) { navigate-image(1); } else { next-track(); }
+                    if (slideshow-transport || queue-navigate-transport) { navigate-image(1); } else { next-track(); }
                     accept
                 } else if (event.modifiers.control && event.text == "f") {
                     toggle-fullscreen();
