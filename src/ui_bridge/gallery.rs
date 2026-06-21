@@ -1,4 +1,4 @@
-use super::loading::{patch_playlist_thumbnail_for_hash, refresh_playlist_thumbnails};
+use super::loading::{gallery_busy, patch_playlist_thumbnail_for_hash};
 use super::state::{AppState, Mode};
 use crate::AppWindow;
 use crate::library::{MediaKind, media_kind};
@@ -9,11 +9,11 @@ use std::sync::Arc;
 use std::sync::mpsc::Sender;
 use std::sync::{Condvar, Mutex};
 
-/// Keep headless mpv poster extraction0 bounded — high concurrency is a common
+/// Keep headless mpv poster extraction bounded — high concurrency is a common
 /// source of flaky frame grabs on Linux when many files load at once.
 const CONCURRENCY: usize = 4;
-const GENERATION_RETRIES: usize = 5;
-const UI_LOAD_ATTEMPTS: usize = 6;
+const GENERATION_RETRIES: usize = 2;
+const UI_LOAD_ATTEMPTS: usize = 3;
 const MAX_GALLERY_RETRY_PASSES: u8 = 3;
 
 pub type GalleryThumbResult = (u64, usize, Option<String>);
@@ -271,7 +271,7 @@ fn generate_poster_hash(path: &std::path::Path, is_video: bool) -> Option<String
             return hash;
         }
         if attempt + 1 < GENERATION_RETRIES {
-            std::thread::sleep(std::time::Duration::from_millis(40 * (attempt as u64 + 1)));
+            std::thread::sleep(std::time::Duration::from_millis(30));
         }
     }
     None
@@ -335,6 +335,59 @@ fn load_gallery_thumbnails(state: &mut AppState, gallery: &GalleryContext<'_>) {
     spawn_gallery_thumb_workers(generation, paths, is_video, work_order, gallery.tx.clone());
 }
 
+/// Extends the grid when a merge import appends to an unchanged order prefix,
+/// generating thumbnails only for the new tail — avoids redoing work already
+/// on screen. Returns false when a full rebuild is required instead.
+pub fn try_append_gallery_thumbnails(state: &mut AppState, gallery: &GalleryContext<'_>) -> bool {
+    if state.gallery_open || gallery_busy(state) {
+        return false;
+    }
+    let Some((order, paths, is_video)) = gallery_source(state) else {
+        return false;
+    };
+    let old = &state.gallery_order;
+    let thumb_count = gallery.thumbnails.row_count();
+    if old.is_empty() || order.len() <= old.len() || thumb_count != old.len() {
+        return false;
+    }
+    if order[..old.len()] != old[..] {
+        return false;
+    }
+
+    let append_from = old.len();
+    let new_count = paths.len() - append_from;
+    state.gallery_generation += 1;
+    let generation = state.gallery_generation;
+    state.gallery_order = order;
+    state.gallery_thumb_retry_pass = 0;
+    state.gallery_thumbs_pending = state.gallery_thumbs_pending.saturating_add(new_count);
+
+    let mut thumbs: Vec<slint::Image> = (0..thumb_count)
+        .filter_map(|i| gallery.thumbnails.row_data(i))
+        .collect();
+    thumbs.resize(paths.len(), slint::Image::default());
+    gallery.thumbnails.set_vec(thumbs);
+
+    let mut flags: Vec<bool> = (0..gallery.video_flags.row_count())
+        .filter_map(|i| gallery.video_flags.row_data(i))
+        .collect();
+    flags.extend_from_slice(&is_video[append_from..]);
+    gallery.video_flags.set_vec(flags);
+
+    let mut failed: Vec<bool> = (0..gallery.failed_flags.row_count())
+        .filter_map(|i| gallery.failed_flags.row_data(i))
+        .collect();
+    failed.resize(paths.len(), false);
+    gallery.failed_flags.set_vec(failed);
+
+    let focus = thumb_focus_index(state);
+    let mut work_order: Vec<usize> = (append_from..paths.len()).collect();
+    work_order.sort_by_key(|&i| i.abs_diff(focus));
+
+    spawn_gallery_thumb_workers(generation, paths, is_video, work_order, gallery.tx.clone());
+    true
+}
+
 fn retry_failed_gallery_thumbnails(
     state: &mut AppState,
     gallery: &GalleryContext<'_>,
@@ -393,7 +446,7 @@ fn finish_gallery_batch(
     state: &mut AppState,
     app: &AppWindow,
     gallery: &GalleryContext<'_>,
-    playlist_model: &VecModel<crate::PlaylistItemData>,
+    _playlist_model: &VecModel<crate::PlaylistItemData>,
 ) {
     let failed = failed_gallery_positions(gallery.failed_flags);
     if !failed.is_empty() && state.gallery_thumb_retry_pass < MAX_GALLERY_RETRY_PASSES {
@@ -403,7 +456,6 @@ fn finish_gallery_batch(
     }
 
     state.gallery_thumb_retry_pass = 0;
-    refresh_playlist_thumbnails(state, playlist_model);
     sync_loading_ui(app, state);
 }
 

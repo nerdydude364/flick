@@ -472,13 +472,17 @@ fn finish_import(
     if total >= 2 {
         state.gallery_open = false;
         app.set_gallery_open(false);
-        super::gallery::open_gallery_grid(
-            mpv,
-            app,
-            state,
-            gallery,
-            super::gallery::GalleryReload::Force,
-        );
+        if added_count > 0 && super::gallery::try_append_gallery_thumbnails(state, gallery) {
+            // Tail-only thumbnail generation — existing grid cells stay as-is.
+        } else {
+            super::gallery::open_gallery_grid(
+                mpv,
+                app,
+                state,
+                gallery,
+                super::gallery::GalleryReload::IfStale,
+            );
+        }
     } else if let Some(path) = single_path {
         // Single file from picker, drop, folder scan, or OS "Open with" —
         // jump straight into playback/view instead of the thumbnail grid.
@@ -548,12 +552,14 @@ pub fn enqueue_paths(
         None
     };
 
-    state.library_loading = true;
-    if state.library_loading_message.is_empty() {
-        state.library_loading_message = "Loading library…".into();
-    }
-
     let added_count = enqueue_into_queues(state, model, named_paths);
+
+    if added_count > 0 {
+        state.library_loading = true;
+        if state.library_loading_message.is_empty() {
+            state.library_loading_message = "Loading library…".into();
+        }
+    }
 
     finish_import(
         mpv,
