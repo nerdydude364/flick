@@ -45,9 +45,24 @@ resolve_7z() {
   exit 1
 }
 
+resolve_python() {
+  if command -v python3 >/dev/null 2>&1; then
+    command -v python3
+    return
+  fi
+  if command -v python >/dev/null 2>&1; then
+    command -v python
+    return
+  fi
+  echo "Python 3 not found — install Python or add it to PATH" >&2
+  exit 1
+}
+
 fetch_asset_url() {
   local kind="$1" # mpv-dev or mpv
-  python3 - "$kind" "$SHINCHIRO_ARCH" <<'PY'
+  local python_cmd
+  python_cmd="$(resolve_python)"
+  "$python_cmd" - "$kind" "$SHINCHIRO_ARCH" <<'PY'
 import json, re, sys, urllib.request
 
 kind, arch = sys.argv[1], sys.argv[2]

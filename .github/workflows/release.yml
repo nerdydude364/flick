@@ -9,6 +9,15 @@ on:
     tags:
       - "v*.*.*"
   workflow_dispatch:
+    inputs:
+      platform:
+        description: 'Platform to run (macos/linux/windows)'
+        required: false
+        default: ''
+      arch:
+        description: 'Architecture to run (amd64/arm64)'
+        required: false
+        default: ''
 
 permissions:
   contents: write
@@ -55,14 +64,14 @@ jobs:
             arch: arm64
             runner: ubuntu-24.04-arm
             container: "ubuntu:22.04"
-          # - platform: windows
-          #   arch: amd64
-          #   runner: windows-latest
-          #   container: ""
-          # - platform: windows
-          #   arch: arm64
-          #   runner: windows-11-arm
-          #   container: ""
+          - platform: windows
+            arch: amd64
+            runner: windows-latest
+            container: ""
+          - platform: windows
+            arch: arm64
+            runner: windows-11-arm
+            container: ""
     steps:
       # ubuntu:22.04 is a bare image — no git/curl/compiler until we install
       # them. Must run before Checkout, since that needs git. No `mpv`/
@@ -145,6 +154,12 @@ jobs:
 
       - name: Install cargo-packager
         run: cargo install --locked cargo-packager
+
+      - name: Install Windows build deps
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: |
+          choco install -y 7zip
 
       - name: Package (macOS)
         if: matrix.platform == 'macos'
