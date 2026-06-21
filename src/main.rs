@@ -1226,8 +1226,12 @@ fn main() {
                     ui_bridge::apply_gallery_thumb(
                         &mut state.borrow_mut(),
                         &app,
-                        &gallery_model,
-                        &gallery_failed_flags,
+                        &ui_bridge::GalleryContext {
+                            thumbnails: &gallery_model,
+                            video_flags: &gallery_video_flags,
+                            failed_flags: &gallery_failed_flags,
+                            tx: &gallery_tx,
+                        },
                         &model,
                         result,
                     );

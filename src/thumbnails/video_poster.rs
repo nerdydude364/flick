@@ -1,7 +1,7 @@
 use super::cache;
 use super::frame;
 use super::hash::hash_video_file_cached;
-use super::poster::POSTER_SIZE;
+use super::poster::{self, POSTER_SIZE};
 use image::codecs::jpeg::JpegEncoder;
 use std::path::Path;
 
@@ -21,5 +21,6 @@ pub fn ensure_video_poster_cached(path: &Path) -> Option<String> {
         .encode_image(&rgb)
         .ok()?;
     cache::write_atomic(&cache::poster_file(&hash), &jpeg_bytes).ok()?;
+    poster::ensure_poster_visible(&hash)?;
     Some(hash)
 }

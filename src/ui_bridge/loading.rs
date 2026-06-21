@@ -29,7 +29,7 @@ fn poster_image_for_hash(hash: &str) -> Option<slint::Image> {
         if let Some(image) = cache.borrow().get(hash) {
             return Some(image.clone());
         }
-        let image = crate::thumbnails::load_cached_poster(hash)?;
+        let image = crate::thumbnails::load_cached_poster_with_retry(hash, 4)?;
         let mut cache = cache.borrow_mut();
         if cache.len() >= POSTER_IMAGE_CACHE_MAX
             && let Some(oldest) = cache.keys().next().cloned()
@@ -45,7 +45,7 @@ fn playlist_row_thumbnail(path: &Path) -> slint::Image {
     let Some(hash) = crate::thumbnails::hash::hash_video_file_cached(path).ok() else {
         return transparent_row_thumbnail();
     };
-    if !crate::thumbnails::cache::is_poster_cached(&hash) {
+    if !crate::thumbnails::cache::poster_is_ready(&hash) {
         return transparent_row_thumbnail();
     }
     poster_image_for_hash(&hash).unwrap_or_else(transparent_row_thumbnail)
@@ -272,7 +272,7 @@ pub(crate) fn patch_playlist_thumbnail_for_hash(
     model: &VecModel<PlaylistItemData>,
     hash: &str,
 ) {
-    if !crate::thumbnails::cache::is_poster_cached(hash) {
+    if !crate::thumbnails::cache::poster_is_ready(hash) {
         return;
     }
     let Some(image) = poster_image_for_hash(hash) else {
@@ -296,6 +296,48 @@ pub(crate) fn patch_playlist_thumbnail_for_hash(
             continue;
         };
         row.thumbnail = image.clone();
+        model.set_row_data(display_index, row);
+    }
+}
+
+/// Fills any sidebar rows whose poster is now cached but still show the
+/// transparent placeholder — e.g. after a gallery batch completes or retries.
+pub(crate) fn refresh_playlist_thumbnails(
+    state: &mut AppState,
+    model: &VecModel<PlaylistItemData>,
+) {
+    let (filtered, _, _) = playlist_view(state);
+    for (display_index, &queue_index) in filtered.iter().enumerate() {
+        let path = match state.mode {
+            Mode::Video => state
+                .queue
+                .item(queue_index)
+                .map(|item| item.path.clone()),
+            Mode::Image => state
+                .image_queue
+                .item(queue_index)
+                .map(|item| item.path.clone()),
+            Mode::All => state
+                .all_queue
+                .item(queue_index)
+                .map(|item| item.path.clone()),
+        };
+        let Some(path) = path else {
+            continue;
+        };
+        let Some(hash) = state.sprite_hash_for(&path) else {
+            continue;
+        };
+        if !crate::thumbnails::cache::poster_is_ready(&hash) {
+            continue;
+        }
+        let Some(image) = poster_image_for_hash(&hash) else {
+            continue;
+        };
+        let Some(mut row) = model.row_data(display_index) else {
+            continue;
+        };
+        row.thumbnail = image;
         model.set_row_data(display_index, row);
     }
 }

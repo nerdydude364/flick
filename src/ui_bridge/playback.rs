@@ -430,6 +430,7 @@ fn finish_import(
     model: &VecModel<PlaylistItemData>,
     imported_count: usize,
     single_path: Option<&PathBuf>,
+    gallery: &GalleryContext<'_>,
 ) {
     if state.all_queue.is_empty() {
         return;
@@ -444,7 +445,13 @@ fn finish_import(
     if imported_count >= 2 {
         state.gallery_open = false;
         app.set_gallery_open(false);
-        state.pending_gallery_reload = true;
+        super::gallery::open_gallery_grid(
+            mpv,
+            app,
+            state,
+            gallery,
+            super::gallery::GalleryReload::IfStale,
+        );
     } else if let Some(path) = single_path {
         // Single file from picker, drop, folder scan, or OS "Open with" —
         // jump straight into playback/view instead of the thumbnail grid.
@@ -461,7 +468,7 @@ pub fn enqueue_paths(
     state: &mut AppState,
     model: &VecModel<PlaylistItemData>,
     named_paths: Vec<(String, PathBuf, Option<u64>)>,
-    _gallery: &GalleryContext<'_>,
+    gallery: &GalleryContext<'_>,
 ) {
     let count = named_paths.len();
     if count > 0 {
@@ -490,8 +497,11 @@ pub fn enqueue_paths(
     enqueue_video_paths(state, model, videos);
     enqueue_image_paths(state, model, images);
 
-    finish_import(mpv, app, state, model, count, single_path.as_ref());
+    finish_import(mpv, app, state, model, count, single_path.as_ref(), gallery);
     sync_loading_ui(app, state);
+    if state.pending_gallery_reload {
+        super::gallery::run_pending_gallery_reload(state, app, gallery);
+    }
 }
 
 pub fn set_mode(

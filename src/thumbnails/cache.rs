@@ -38,7 +38,17 @@ pub fn poster_file(hash: &str) -> PathBuf {
 }
 
 pub fn is_poster_cached(hash: &str) -> bool {
-    poster_file(hash).exists()
+    poster_is_ready(hash)
+}
+
+/// True when the poster JPEG exists and has non-zero size — guards against
+/// reading a file that was renamed into place but isn't visible yet (seen on
+/// some Linux filesystems) or a truncated write.
+pub fn poster_is_ready(hash: &str) -> bool {
+    poster_file(hash)
+        .metadata()
+        .map(|m| m.len() > 0)
+        .unwrap_or(false)
 }
 
 /// Atomic write: temp file + rename, so a crash mid-write never leaves a

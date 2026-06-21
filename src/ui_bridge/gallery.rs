@@ -1,3 +1,4 @@
+use super::loading::{patch_playlist_thumbnail_for_hash, refresh_playlist_thumbnails};
 use super::state::{AppState, Mode};
 use crate::AppWindow;
 use crate::library::{MediaKind, media_kind};
@@ -8,7 +9,12 @@ use std::sync::Arc;
 use std::sync::mpsc::Sender;
 use std::sync::{Condvar, Mutex};
 
-const CONCURRENCY: usize = 8;
+/// Keep headless mpv poster extraction0 bounded — high concurrency is a common
+/// source of flaky frame grabs on Linux when many files load at once.
+const CONCURRENCY: usize = 4;
+const GENERATION_RETRIES: usize = 5;
+const UI_LOAD_ATTEMPTS: usize = 6;
+const MAX_GALLERY_RETRY_PASSES: u8 = 3;
 
 pub type GalleryThumbResult = (u64, usize, Option<String>);
 
@@ -244,12 +250,66 @@ impl ConcurrencyGate {
     }
 }
 
+struct GateGuard<'a>(&'a ConcurrencyGate);
+
+impl Drop for GateGuard<'_> {
+    fn drop(&mut self) {
+        self.0.release();
+    }
+}
+
+fn generate_poster_hash(path: &std::path::Path, is_video: bool) -> Option<String> {
+    for attempt in 0..GENERATION_RETRIES {
+        let hash = if is_video {
+            crate::thumbnails::ensure_video_poster_cached(path)
+        } else {
+            crate::thumbnails::ensure_poster_cached(path)
+        };
+        if let Some(ref h) = hash {
+            if crate::thumbnails::cache::poster_is_ready(h) {
+                return hash;
+            }
+        }
+        if attempt + 1 < GENERATION_RETRIES {
+            std::thread::sleep(std::time::Duration::from_millis(40 * (attempt as u64 + 1)));
+        }
+    }
+    None
+}
+
+fn spawn_gallery_thumb_workers(
+    generation: u64,
+    paths: Vec<PathBuf>,
+    is_video: Vec<bool>,
+    work_order: Vec<usize>,
+    tx: Sender<GalleryThumbResult>,
+) {
+    std::thread::spawn(move || {
+        let gate = Arc::new(ConcurrencyGate::new(CONCURRENCY));
+        std::thread::scope(|scope| {
+            for pos in work_order {
+                let path = paths[pos].clone();
+                let is_vid = is_video[pos];
+                let tx = tx.clone();
+                let gate = Arc::clone(&gate);
+                scope.spawn(move || {
+                    gate.acquire();
+                    let _release = GateGuard(&gate);
+                    let hash = generate_poster_hash(&path, is_vid);
+                    let _ = tx.send((generation, pos, hash));
+                });
+            }
+        });
+    });
+}
+
 fn load_gallery_thumbnails(state: &mut AppState, gallery: &GalleryContext<'_>) {
     let Some((order, paths, is_video)) = gallery_source(state) else {
         state.gallery_order.clear();
         state.gallery_thumbs_pending = 0;
         state.gallery_thumbs_loaded = 0;
         state.gallery_thumbs_failed = 0;
+        state.gallery_thumb_retry_pass = 0;
         gallery.thumbnails.set_vec(Vec::new());
         gallery.video_flags.set_vec(Vec::new());
         gallery.failed_flags.set_vec(Vec::new());
@@ -261,6 +321,8 @@ fn load_gallery_thumbnails(state: &mut AppState, gallery: &GalleryContext<'_>) {
     state.gallery_order = order;
     state.gallery_thumbs_pending = paths.len();
     state.gallery_thumbs_loaded = 0;
+    state.gallery_thumbs_failed = 0;
+    state.gallery_thumb_retry_pass = 0;
 
     gallery
         .thumbnails
@@ -270,63 +332,114 @@ fn load_gallery_thumbnails(state: &mut AppState, gallery: &GalleryContext<'_>) {
 
     let focus = thumb_focus_index(state);
     let work_order = thumb_work_order(paths.len(), focus);
+    spawn_gallery_thumb_workers(
+        generation,
+        paths,
+        is_video,
+        work_order,
+        gallery.tx.clone(),
+    );
+}
+
+fn retry_failed_gallery_thumbnails(
+    state: &mut AppState,
+    gallery: &GalleryContext<'_>,
+    failed_positions: Vec<usize>,
+) {
+    let Some((_, paths, is_video)) = gallery_source(state) else {
+        return;
+    };
+    if failed_positions.is_empty() {
+        return;
+    }
+
+    state.gallery_generation += 1;
+    let generation = state.gallery_generation;
+    state.gallery_thumb_retry_pass = state.gallery_thumb_retry_pass.saturating_add(1);
+    state.gallery_thumbs_pending = failed_positions.len();
+    state.gallery_thumbs_loaded = 0;
+    state.gallery_thumbs_failed = 0;
+
+    for pos in &failed_positions {
+        gallery.failed_flags.set_row_data(*pos, false);
+    }
+
+    let work_paths: Vec<PathBuf> = failed_positions.iter().map(|&i| paths[i].clone()).collect();
+    let work_is_video: Vec<bool> = failed_positions
+        .iter()
+        .map(|&i| is_video[i])
+        .collect();
+    let work_order: Vec<usize> = (0..failed_positions.len()).collect();
+
     let tx = gallery.tx.clone();
     std::thread::spawn(move || {
-        const RETRIES: usize = 3;
         let gate = Arc::new(ConcurrencyGate::new(CONCURRENCY));
         std::thread::scope(|scope| {
-            for pos in work_order {
-                let path = paths[pos].clone();
-                let is_vid = is_video[pos];
+            for local_pos in work_order {
+                let path = work_paths[local_pos].clone();
+                let is_vid = work_is_video[local_pos];
+                let grid_pos = failed_positions[local_pos];
                 let tx = tx.clone();
                 let gate = Arc::clone(&gate);
                 scope.spawn(move || {
                     gate.acquire();
-                    let mut hash: Option<String> = None;
-                    for _attempt in 0..RETRIES {
-                        hash = if is_vid {
-                            crate::thumbnails::ensure_video_poster_cached(&path)
-                        } else {
-                            crate::thumbnails::ensure_poster_cached(&path)
-                        };
-                        if let Some(ref h) = hash {
-                            // make sure the cache file is visible on disk before
-                            // telling the UI thread to try loading it.
-                            let p = crate::thumbnails::cache::poster_file(h);
-                            if p.exists() {
-                                break;
-                            }
-                        }
-                        std::thread::sleep(std::time::Duration::from_millis(50));
-                    }
-                    gate.release();
-                    let _ = tx.send((generation, pos, hash));
+                    let _release = GateGuard(&gate);
+                    let hash = generate_poster_hash(&path, is_vid);
+                    let _ = tx.send((generation, grid_pos, hash));
                 });
             }
         });
     });
 }
 
+fn failed_gallery_positions(failed_flags: &VecModel<bool>) -> Vec<usize> {
+    (0..failed_flags.row_count())
+        .filter(|&i| failed_flags.row_data(i).unwrap_or(false))
+        .collect()
+}
+
+fn finish_gallery_batch(
+    state: &mut AppState,
+    app: &AppWindow,
+    gallery: &GalleryContext<'_>,
+    playlist_model: &VecModel<crate::PlaylistItemData>,
+) {
+    let failed = failed_gallery_positions(gallery.failed_flags);
+    if !failed.is_empty() && state.gallery_thumb_retry_pass < MAX_GALLERY_RETRY_PASSES {
+        retry_failed_gallery_thumbnails(state, gallery, failed);
+        sync_loading_ui(app, state);
+        return;
+    }
+
+    state.gallery_thumb_retry_pass = 0;
+    refresh_playlist_thumbnails(state, playlist_model);
+    sync_loading_ui(app, state);
+}
+
 pub fn apply_gallery_thumb(
     state: &mut AppState,
     app: &AppWindow,
-    gallery_model: &VecModel<slint::Image>,
-    failed_flags: &VecModel<bool>,
+    gallery: &GalleryContext<'_>,
     playlist_model: &VecModel<crate::PlaylistItemData>,
     result: GalleryThumbResult,
 ) {
     let (generation, pos, hash) = result;
-    if generation != state.gallery_generation || pos >= gallery_model.row_count() {
+    if generation != state.gallery_generation || pos >= gallery.thumbnails.row_count() {
         return;
     }
-    let success = if let Some(ref hash) = hash
-        && let Some(image) = crate::thumbnails::load_cached_poster(hash)
-    {
-        gallery_model.set_row_data(pos, image);
-        super::loading::patch_playlist_thumbnail_for_hash(state, playlist_model, hash);
-        true
+    let success = if let Some(ref hash) = hash {
+        if let Some(image) =
+            crate::thumbnails::load_cached_poster_with_retry(hash, UI_LOAD_ATTEMPTS)
+        {
+            gallery.thumbnails.set_row_data(pos, image);
+            patch_playlist_thumbnail_for_hash(state, playlist_model, hash);
+            true
+        } else {
+            gallery.failed_flags.set_row_data(pos, true);
+            false
+        }
     } else {
-        failed_flags.set_row_data(pos, true);
+        gallery.failed_flags.set_row_data(pos, true);
         false
     };
     if success {
@@ -336,7 +449,9 @@ pub fn apply_gallery_thumb(
     }
     let done = state.gallery_thumbs_loaded + state.gallery_thumbs_failed;
     let pending = state.gallery_thumbs_pending;
-    if done == pending || done.is_multiple_of(8) {
-        super::loading::sync_loading_ui(app, state);
+    if done == pending {
+        finish_gallery_batch(state, app, gallery, playlist_model);
+    } else if done.is_multiple_of(4) {
+        sync_loading_ui(app, state);
     }
 }

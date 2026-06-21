@@ -2,6 +2,7 @@ use super::cache;
 use super::hash::hash_video_file_cached;
 use image::imageops::FilterType;
 use std::path::Path;
+use std::time::{Duration, Instant};
 
 /// Square thumbnail size for the gallery grid — matches the ~120px cell size
 /// (with a little headroom for retina); keeps decode/encode/cache I/O small.
@@ -34,12 +35,47 @@ pub fn ensure_poster_cached(path: &Path) -> Option<String> {
             .encode_image(&thumb)
             .ok()?;
         cache::write_atomic(&cache::poster_file(&hash), &jpeg_bytes).ok()?;
+        wait_for_poster_ready(&hash, Duration::from_millis(500))?;
     }
     Some(hash)
+}
+
+/// Blocks until the poster JPEG is visible with non-zero size, or times out.
+pub fn ensure_poster_visible(hash: &str) -> Option<()> {
+    wait_for_poster_ready(hash, Duration::from_millis(500))
+}
+
+fn wait_for_poster_ready(hash: &str, timeout: Duration) -> Option<()> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if cache::poster_is_ready(hash) {
+            return Some(());
+        }
+        if Instant::now() >= deadline {
+            return None;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
 }
 
 /// Loads a previously cached poster thumbnail by content hash. Must run on
 /// the UI thread — see `ensure_poster_cached`'s doc comment.
 pub fn load_cached_poster(hash: &str) -> Option<slint::Image> {
     slint::Image::load_from_path(&cache::poster_file(hash)).ok()
+}
+
+/// UI-thread decode with short retries — cache files can land on disk a tick
+/// before Slint/image decoders can read them reliably (especially on Linux).
+pub fn load_cached_poster_with_retry(hash: &str, attempts: usize) -> Option<slint::Image> {
+    for attempt in 0..attempts {
+        if cache::poster_is_ready(hash)
+            && let Some(image) = load_cached_poster(hash)
+        {
+            return Some(image);
+        }
+        if attempt + 1 < attempts {
+            std::thread::sleep(Duration::from_millis(8 * (attempt as u64 + 1)));
+        }
+    }
+    None
 }
