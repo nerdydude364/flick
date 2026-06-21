@@ -152,14 +152,14 @@ jobs:
         if: matrix.platform == 'macos'
         run: brew install mpv pkg-config dylibbundler
 
-      - name: Install cargo-packager
-        run: cargo install --locked cargo-packager
-
       - name: Install Windows build deps
         if: matrix.platform == 'windows'
         shell: pwsh
         run: |
           choco install -y 7zip
+
+      - name: Install cargo-packager
+        run: cargo install --locked cargo-packager
 
       - name: Package (macOS)
         if: matrix.platform == 'macos'
@@ -171,7 +171,7 @@ jobs:
           APPIMAGE_EXTRACT_AND_RUN: "1"
         run: ./scripts/package-linux.sh
 
-      - name: Download and Extract libmpv
+      - name: Download and extract libmpv
         if: matrix.platform == 'windows'
         shell: bash
         env:
@@ -189,7 +189,7 @@ jobs:
         run: |
           echo "LIBCLANG_PATH=C:\Program Files\LLVM\bin" | Out-File -Encoding utf8 -Append -FilePath $env:GITHUB_ENV
 
-      - name: Package (Windows)
+      - name: Package Windows installer
         if: matrix.platform == 'windows'
         shell: pwsh
         env:
