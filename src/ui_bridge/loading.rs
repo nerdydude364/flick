@@ -32,11 +32,7 @@ fn compose_loading_message(state: &AppState) -> String {
     if let Some(job) = state.pending_playlist_rebuild.as_ref() {
         let total = job.filtered.len();
         let done = job.next_index.min(total);
-        let label = if job.sprite_pass {
-            "previews"
-        } else {
-            "items"
-        };
+        let label = if job.sprite_pass { "previews" } else { "items" };
         parts.push(format!("{label} {done}/{total}"));
     }
     if gallery_busy(state) {

@@ -488,14 +488,7 @@ pub fn enqueue_paths(
     enqueue_video_paths(state, model, videos);
     enqueue_image_paths(state, model, images);
 
-    finish_import(
-        mpv,
-        app,
-        state,
-        model,
-        count,
-        single_path.as_ref(),
-    );
+    finish_import(mpv, app, state, model, count, single_path.as_ref());
     sync_loading_ui(app, state);
 }
 
