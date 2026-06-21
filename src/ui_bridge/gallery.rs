@@ -265,10 +265,10 @@ fn generate_poster_hash(path: &std::path::Path, is_video: bool) -> Option<String
         } else {
             crate::thumbnails::ensure_poster_cached(path)
         };
-        if let Some(ref h) = hash {
-            if crate::thumbnails::cache::poster_is_ready(h) {
-                return hash;
-            }
+        if let Some(ref h) = hash
+            && crate::thumbnails::cache::poster_is_ready(h)
+        {
+            return hash;
         }
         if attempt + 1 < GENERATION_RETRIES {
             std::thread::sleep(std::time::Duration::from_millis(40 * (attempt as u64 + 1)));
@@ -332,13 +332,7 @@ fn load_gallery_thumbnails(state: &mut AppState, gallery: &GalleryContext<'_>) {
 
     let focus = thumb_focus_index(state);
     let work_order = thumb_work_order(paths.len(), focus);
-    spawn_gallery_thumb_workers(
-        generation,
-        paths,
-        is_video,
-        work_order,
-        gallery.tx.clone(),
-    );
+    spawn_gallery_thumb_workers(generation, paths, is_video, work_order, gallery.tx.clone());
 }
 
 fn retry_failed_gallery_thumbnails(
@@ -365,10 +359,7 @@ fn retry_failed_gallery_thumbnails(
     }
 
     let work_paths: Vec<PathBuf> = failed_positions.iter().map(|&i| paths[i].clone()).collect();
-    let work_is_video: Vec<bool> = failed_positions
-        .iter()
-        .map(|&i| is_video[i])
-        .collect();
+    let work_is_video: Vec<bool> = failed_positions.iter().map(|&i| is_video[i]).collect();
     let work_order: Vec<usize> = (0..failed_positions.len()).collect();
 
     let tx = gallery.tx.clone();

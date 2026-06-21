@@ -309,10 +309,7 @@ pub(crate) fn refresh_playlist_thumbnails(
     let (filtered, _, _) = playlist_view(state);
     for (display_index, &queue_index) in filtered.iter().enumerate() {
         let path = match state.mode {
-            Mode::Video => state
-                .queue
-                .item(queue_index)
-                .map(|item| item.path.clone()),
+            Mode::Video => state.queue.item(queue_index).map(|item| item.path.clone()),
             Mode::Image => state
                 .image_queue
                 .item(queue_index)
