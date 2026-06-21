@@ -401,26 +401,45 @@ fn remove_from_typed_queues(state: &mut AppState, path: &PathBuf) {
     let _ = state.image_queue.remove_by_path(path);
 }
 
-fn enqueue_video_paths(
+fn enqueue_into_queues(
     state: &mut AppState,
     model: &VecModel<PlaylistItemData>,
     named_paths: Vec<(String, PathBuf, Option<u64>)>,
-) {
-    state.queue.enqueue(named_paths);
-    if state.mode == Mode::Video {
-        rebuild_playlist_model(state, model);
-    }
-}
+) -> usize {
+    let added_all = state.all_queue.enqueue(
+        named_paths
+            .iter()
+            .map(|(n, p, s)| (n.clone(), p.clone(), *s)),
+    );
+    state.all_queue.extend_play_order(&added_all);
 
-fn enqueue_image_paths(
-    state: &mut AppState,
-    model: &VecModel<PlaylistItemData>,
-    named_paths: Vec<(String, PathBuf, Option<u64>)>,
-) {
-    state.image_queue.enqueue(named_paths);
-    if state.mode == Mode::Image {
-        rebuild_playlist_model(state, model);
+    let (videos, images): (Vec<_>, Vec<_>) = named_paths
+        .into_iter()
+        .partition(|(_, p, _)| crate::library::is_video_file(p));
+
+    let added_videos = state.queue.enqueue(videos);
+    state.queue.extend_play_order(&added_videos);
+    let added_images = state.image_queue.enqueue(images);
+    state.image_queue.extend_play_order(&added_images);
+
+    if state.shuffle_on {
+        let query = state.search_query.clone();
+        if !added_videos.is_empty() {
+            state.queue.reshuffle_keep_current_first(&query);
+        }
+        if !added_images.is_empty() {
+            state.image_queue.reshuffle_keep_current_first(&query);
+        }
+        if !added_all.is_empty() {
+            state.all_queue.reshuffle_keep_current_first(&query);
+        }
     }
+
+    if matches!(state.mode, Mode::Video | Mode::Image) {
+        super::loading::schedule_playlist_rebuild(state, model);
+    }
+
+    added_all.len()
 }
 
 fn finish_import(
@@ -428,11 +447,16 @@ fn finish_import(
     app: &AppWindow,
     state: &mut AppState,
     model: &VecModel<PlaylistItemData>,
-    imported_count: usize,
+    added_count: usize,
     single_path: Option<&PathBuf>,
     gallery: &GalleryContext<'_>,
 ) {
     if state.all_queue.is_empty() {
+        return;
+    }
+    if added_count == 0 {
+        super::loading::schedule_playlist_rebuild(state, model);
+        super::loading::try_finish_import_session(state, app);
         return;
     }
     if state.mode != Mode::All {
@@ -440,9 +464,12 @@ fn finish_import(
         sync_mode_ui(app, state);
     }
     app.set_has_media(true);
+    app.set_has_videos(!state.queue.is_empty());
+    app.set_has_images(!state.image_queue.is_empty());
     super::loading::schedule_playlist_rebuild(state, model);
 
-    if imported_count >= 2 {
+    let total = state.all_queue.len();
+    if total >= 2 {
         state.gallery_open = false;
         app.set_gallery_open(false);
         super::gallery::open_gallery_grid(
@@ -450,7 +477,7 @@ fn finish_import(
             app,
             state,
             gallery,
-            super::gallery::GalleryReload::IfStale,
+            super::gallery::GalleryReload::Force,
         );
     } else if let Some(path) = single_path {
         // Single file from picker, drop, folder scan, or OS "Open with" —
@@ -462,6 +489,47 @@ fn finish_import(
     }
 }
 
+pub fn clear_library(
+    mpv: &Mpv,
+    app: &AppWindow,
+    state: &mut AppState,
+    model: &VecModel<PlaylistItemData>,
+    gallery: &GalleryContext<'_>,
+) {
+    state.library_session = state.library_session.wrapping_add(1);
+    state.queue.clear();
+    state.image_queue.clear();
+    state.all_queue.clear();
+    state.gallery_open = false;
+    state.gallery_order.clear();
+    state.gallery_generation = state.gallery_generation.wrapping_add(1);
+    state.pending_gallery_reload = false;
+    state.gallery_thumbs_pending = 0;
+    state.gallery_thumbs_loaded = 0;
+    state.gallery_thumbs_failed = 0;
+    state.gallery_thumb_retry_pass = 0;
+    state.pending_playlist_rebuild = None;
+    state.library_loading = false;
+    state.library_loading_message.clear();
+    state.gif_animation = None;
+    state.all_current_is_video = false;
+
+    gallery.thumbnails.set_vec(Vec::new());
+    gallery.video_flags.set_vec(Vec::new());
+    gallery.failed_flags.set_vec(Vec::new());
+
+    log_mpv_err("stop", mpv.command("stop", &[]));
+    app.set_playing(false);
+    app.set_gallery_open(false);
+    app.set_has_media(false);
+    app.set_has_videos(false);
+    app.set_has_images(false);
+
+    sync_active_view_ui(app, state);
+    rebuild_playlist_model(state, model);
+    sync_loading_ui(app, state);
+}
+
 pub fn enqueue_paths(
     mpv: &Mpv,
     app: &AppWindow,
@@ -470,34 +538,32 @@ pub fn enqueue_paths(
     named_paths: Vec<(String, PathBuf, Option<u64>)>,
     gallery: &GalleryContext<'_>,
 ) {
-    let count = named_paths.len();
-    if count > 0 {
-        state.library_loading = true;
-        if state.library_loading_message.is_empty() {
-            state.library_loading_message = "Loading library…".into();
-        }
+    if named_paths.is_empty() {
+        return;
     }
 
-    let single_path = if count == 1 {
+    let single_path = if named_paths.len() == 1 {
         named_paths.first().map(|(_, path, _)| path.clone())
     } else {
         None
     };
 
-    state.all_queue.enqueue(
-        named_paths
-            .iter()
-            .map(|(n, p, s)| (n.clone(), p.clone(), *s)),
+    state.library_loading = true;
+    if state.library_loading_message.is_empty() {
+        state.library_loading_message = "Loading library…".into();
+    }
+
+    let added_count = enqueue_into_queues(state, model, named_paths);
+
+    finish_import(
+        mpv,
+        app,
+        state,
+        model,
+        added_count,
+        single_path.as_ref(),
+        gallery,
     );
-
-    let (videos, images): (Vec<_>, Vec<_>) = named_paths
-        .into_iter()
-        .partition(|(_, p, _)| crate::library::is_video_file(p));
-
-    enqueue_video_paths(state, model, videos);
-    enqueue_image_paths(state, model, images);
-
-    finish_import(mpv, app, state, model, count, single_path.as_ref(), gallery);
     sync_loading_ui(app, state);
     if state.pending_gallery_reload {
         super::gallery::run_pending_gallery_reload(state, app, gallery);

@@ -85,6 +85,8 @@ pub struct AppState {
     pub gallery_thumb_retry_pass: u8,
     /// Heavy thumbnail rebuild deferred until after the grid shell paints.
     pub pending_gallery_reload: bool,
+    /// Bumped on clear so in-flight folder-scan batches are ignored.
+    pub library_session: u64,
 }
 
 impl AppState {
@@ -116,6 +118,7 @@ impl AppState {
             gallery_thumbs_failed: 0,
             gallery_thumb_retry_pass: 0,
             pending_gallery_reload: false,
+            library_session: 0,
         }
     }
 
