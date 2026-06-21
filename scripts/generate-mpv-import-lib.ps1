@@ -45,7 +45,7 @@ try {
         & $libExe.FullName "/def:mpv.def" "/name:libmpv-2.dll" "/out:mpv.lib" "/MACHINE:$arch"
     } else {
         if (-not $dumpbin) {
-            throw "dumpbin.exe not found under $vsPath — cannot generate .def from DLL"
+            throw "dumpbin.exe not found under $vsPath - cannot generate .def from DLL"
         }
         Write-Host "Generating mpv.def from $dllPath via dumpbin"
         $dumpOutput = & $dumpbin.FullName "/exports" $dllPath 2>&1 | Out-String
