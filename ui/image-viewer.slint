@@ -169,14 +169,14 @@ export component ImageViewer inherits Rectangle {
                 clicked => { gallery-item-clicked(i); }
             }
         }
+    }
 
-        if gallery-loading: LoadingOverlay {
-            x: 0;
-            y: 0;
-            width: hit-width;
-            height: hit-height;
-            show: true;
-            message: gallery-loading-message;
-        }
+    if gallery-loading: LoadingOverlay {
+        x: 0;
+        y: 0;
+        width: hit-width;
+        height: hit-height;
+        show: true;
+        message: gallery-loading-message;
     }
 }
