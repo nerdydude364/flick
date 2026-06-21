@@ -120,6 +120,7 @@ impl AppState {
     /// `rebuild_playlist_model` looks up this video's status glyph. A
     /// no-op if `path` is already cached.
     pub(crate) fn prime_sprite_hash(&mut self, path: PathBuf, hash: String) {
+        crate::thumbnails::hash::prime_content_hash(path.clone(), hash.clone());
         self.sprite_hash.entry(path).or_insert(hash);
     }
 
@@ -128,7 +129,7 @@ impl AppState {
         if let Some(h) = self.sprite_hash.get(path) {
             return Some(h.clone());
         }
-        let hash = thumbnails::hash::hash_video_file(path).ok()?;
+        let hash = crate::thumbnails::hash::hash_video_file_cached(path).ok()?;
         self.sprite_hash.insert(path.to_path_buf(), hash.clone());
         Some(hash)
     }

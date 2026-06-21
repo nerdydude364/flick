@@ -13,7 +13,8 @@ pub use gallery::{
 };
 pub use gif::tick_gif_animation;
 pub use loading::{
-    rebuild_playlist_model, set_library_loading, sync_loading_ui, tick_playlist_rebuild,
+    rebuild_playlist_model, sync_loading_ui, tick_playlist_rebuild, try_finish_import_session,
+    try_start_pending_gallery_reload,
 };
 pub use playback::{
     advance_on_video_eof, all_slideshow_wants_timer, enqueue_paths, navigate_all_relative,
