@@ -108,8 +108,6 @@ echo "==> Extracting mpv-dev"
 echo "==> Extracting mpv runtime"
 "$SEVENZ" x -y "-o$TMP/runtime" "$TMP/mpv-runtime.7z" >/dev/null
 
-# shinchiro archives flatten to a single directory of files.
-shopt -s nullglob
 find_root() {
   local root="$1"
   local marker="$2"
@@ -117,18 +115,11 @@ find_root() {
 }
 
 dev_root="$(find_root "$TMP/dev" 'libmpv-2.dll')"
-runtime_root="$(find_root "$TMP/runtime" 'mpv.exe')"
-if [ -z "$runtime_root" ]; then
-  runtime_root="$(find_root "$TMP/runtime" 'd3dcompiler_43.dll')"
-fi
 if [ -z "$dev_root" ]; then
   echo "FAILED: could not locate libmpv-2.dll in downloaded dev archive" >&2
   exit 1
 fi
-if [ -z "$runtime_root" ]; then
-  echo "FAILED: could not locate runtime root in downloaded runtime archive" >&2
-  exit 1
-fi
+
 cp -f "$dev_root/libmpv-2.dll" "$MPV_DIR/bin/"
 if [ -d "$dev_root/include" ]; then
   cp -a "$dev_root/include" "$MPV_DIR/"
@@ -137,7 +128,16 @@ if [ -f "$dev_root/mpv.def" ]; then
   cp -f "$dev_root/mpv.def" "$MPV_DIR/lib/"
 fi
 
-cp -f "$runtime_root/"*.dll "$MPV_DIR/bin/"
+# Runtime layout differs by arch: amd64 ships loose DLLs (e.g. d3dcompiler_43.dll
+# at the archive root), while aarch64 may have none — libmpv-2.dll from mpv-dev
+# is enough for flick to link and bundle.
+runtime_dll_count=0
+while IFS= read -r dll; do
+  [ -n "$dll" ] || continue
+  cp -f "$dll" "$MPV_DIR/bin/"
+  runtime_dll_count=$((runtime_dll_count + 1))
+done < <(find "$TMP/runtime" -name '*.dll' -type f)
+echo "==> Copied $runtime_dll_count runtime DLL(s)"
 
 if [ -f "$MPV_DIR/lib/mpv.lib" ]; then
   echo "==> Using bundled mpv.lib"
