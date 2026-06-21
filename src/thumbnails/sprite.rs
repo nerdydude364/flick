@@ -29,17 +29,19 @@ impl SpriteMemoryCache {
         }
         self.order.retain(|h| h != hash);
         self.order.push(hash.to_string());
-        self.entries.get(hash).map(|(image, meta)| (image.clone(), meta.clone()))
+        self.entries
+            .get(hash)
+            .map(|(image, meta)| (image.clone(), meta.clone()))
     }
 
     fn insert(&mut self, hash: String, image: slint::Image, meta: SpriteMeta) {
         if self.entries.contains_key(&hash) {
             self.order.retain(|h| h != &hash);
-        } else if self.entries.len() >= SPRITE_MEMORY_CACHE_MAX {
-            if let Some(oldest) = self.order.first().cloned() {
-                self.order.remove(0);
-                self.entries.remove(&oldest);
-            }
+        } else if self.entries.len() >= SPRITE_MEMORY_CACHE_MAX
+            && let Some(oldest) = self.order.first().cloned()
+        {
+            self.order.remove(0);
+            self.entries.remove(&oldest);
         }
         self.order.push(hash.clone());
         self.entries.insert(hash, (image, meta));

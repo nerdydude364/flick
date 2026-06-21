@@ -31,10 +31,10 @@ fn poster_image_for_hash(hash: &str) -> Option<slint::Image> {
         }
         let image = crate::thumbnails::load_cached_poster(hash)?;
         let mut cache = cache.borrow_mut();
-        if cache.len() >= POSTER_IMAGE_CACHE_MAX {
-            if let Some(oldest) = cache.keys().next().cloned() {
-                cache.remove(&oldest);
-            }
+        if cache.len() >= POSTER_IMAGE_CACHE_MAX
+            && let Some(oldest) = cache.keys().next().cloned()
+        {
+            cache.remove(&oldest);
         }
         cache.insert(hash.to_string(), image.clone());
         Some(image)
@@ -76,11 +76,7 @@ fn compose_loading_message(state: &AppState) -> String {
     if let Some(job) = state.pending_playlist_rebuild.as_ref() {
         let total = job.filtered.len();
         let done = job.next_index.min(total);
-        let label = if job.sprite_pass {
-            "previews"
-        } else {
-            "items"
-        };
+        let label = if job.sprite_pass { "previews" } else { "items" };
         parts.push(format!("{label} {done}/{total}"));
     }
     if state.gallery_thumbs_pending > 0 {
@@ -255,7 +251,7 @@ pub(crate) fn patch_sprite_status_for_hash(
         };
         let path = item.path.clone();
         let is_video = media_kind(&path) == MediaKind::Video;
-        if !show_sprite_status && !(state.mode == Mode::All && is_video) {
+        if !(show_sprite_status || state.mode == Mode::All && is_video) {
             continue;
         }
         if state.sprite_hash_for(&path).as_deref() != Some(hash) {

@@ -1,0 +1,47 @@
+import { Theme } from "theme.slint";
+
+export component Toast inherits Rectangle {
+    in property <string> message: "";
+    in property <bool> error: false;
+    in-out property <bool> show: false;
+
+    clip: false;
+    background: transparent;
+
+    dismiss-timer := Timer {
+        interval: 4s;
+        running: false;
+        triggered => { show = false; }
+    }
+
+    changed show => { if (show) { dismiss-timer.restart(); } }
+    changed message => { if (show) { dismiss-timer.restart(); } }
+
+    if show && message != "": Rectangle {
+        width: 100%;
+        min-height: 44px;
+        border-radius: Theme.radius-md;
+        background: error ? #4a1f1fe6 : #1a3428e6;
+        border-width: 1px;
+        border-color: error ? Theme.danger : #4ade8080;
+
+        HorizontalLayout {
+            padding-left: 14px;
+            padding-right: 14px;
+            padding-top: 11px;
+            padding-bottom: 11px;
+            spacing: Theme.gap-sm;
+
+            Text {
+                text: message;
+                color: Theme.fg;
+                font-size: 13px;
+                wrap: word-wrap;
+                horizontal-stretch: 1;
+                vertical-alignment: center;
+            }
+        }
+
+        animate opacity { duration: Theme.fast; }
+    }
+}

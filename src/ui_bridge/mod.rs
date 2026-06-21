@@ -75,3 +75,9 @@ pub fn format_time(seconds: f64) -> String {
         format!("{m}:{s:02}")
     }
 }
+
+pub fn show_toast(app: &crate::AppWindow, message: impl Into<slint::SharedString>, error: bool) {
+    app.set_toast_message(message.into());
+    app.set_toast_error(error);
+    app.set_toast_visible(true);
+}

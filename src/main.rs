@@ -432,17 +432,28 @@ fn wire_playback_controls(app: &AppWindow, mpv: &Rc<Mpv>, state: &Rc<RefCell<App
 
     {
         let mpv = Rc::clone(mpv);
+        let app_weak = app.as_weak();
         app.on_take_screenshot(move || {
+            let Some(app) = app_weak.upgrade() else {
+                return;
+            };
             let dir = dirs::picture_dir().unwrap_or_else(std::env::temp_dir);
             let timestamp = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_secs();
             let path = dir.join(format!("Flick-Screenshot-{timestamp}.png"));
-            ui_bridge::log_mpv_err(
-                "screenshot",
-                mpv.command("screenshot-to-file", &[&path.to_string_lossy(), "video"]),
-            );
+            match mpv.command("screenshot-to-file", &[&path.to_string_lossy(), "video"]) {
+                Ok(_) => ui_bridge::show_toast(
+                    &app,
+                    format!("Screenshot saved to {}", path.display()),
+                    false,
+                ),
+                Err(err) => {
+                    eprintln!("screenshot failed: {err}");
+                    ui_bridge::show_toast(&app, format!("Screenshot failed: {err}"), true);
+                }
+            }
         });
     }
 

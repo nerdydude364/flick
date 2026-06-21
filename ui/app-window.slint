@@ -3,6 +3,7 @@ import { Sidebar, PlaylistItemData } from "sidebar.slint";
 import { ProgressBar } from "progress-bar.slint";
 import { ImageViewer } from "image-viewer.slint";
 import { IconButton, TrackSlider } from "components.slint";
+import { Toast } from "toast.slint";
 
 export { PlaylistItemData }
 
@@ -84,6 +85,10 @@ export component AppWindow inherits Window {
     in property <bool> library-loading: false;
     in property <string> library-loading-message: "";
     in property <bool> gallery-loading: false;
+
+    in-out property <bool> toast-visible: false;
+    in property <string> toast-message: "";
+    in property <bool> toast-error: false;
 
     property <bool> image-mode: view-mode == 1;
     property <bool> all-mode: view-mode == 2;
@@ -686,6 +691,15 @@ export component AppWindow inherits Window {
                     }
                 }
             }
+        }
+
+        if toast-visible: Toast {
+            x: 16px;
+            y: parent.height - chrome-bottom-h - self.height - 12px;
+            width: parent.width - chrome-sidebar-w - 32px;
+            show <=> root.toast-visible;
+            message: root.toast-message;
+            error: root.toast-error;
         }
 
         if error-message != "": Rectangle {

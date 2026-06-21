@@ -276,10 +276,7 @@ pub fn apply_sprite_result(
     if ok {
         let path = current_video_path(state);
         if path.is_some()
-            && state
-                .sprite_hash_for(path.as_ref().unwrap())
-                .as_deref()
-                == Some(hash.as_str())
+            && state.sprite_hash_for(path.as_ref().unwrap()).as_deref() == Some(hash.as_str())
         {
             sync_sprite_preview(app, state);
         }
