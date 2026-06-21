@@ -1,3 +1,6 @@
+#[cfg(windows)]
+use std::path::{Path, PathBuf};
+
 fn main() {
     slint_build::compile("ui/app-window.slint").unwrap();
     link_mpv();
@@ -204,8 +207,6 @@ fn probe_mpv_lib_dirs() -> bool {
 
 #[cfg(windows)]
 fn probe_windows_mpv_lib_dir() -> bool {
-    use std::path::{Path, PathBuf};
-
     let mut candidates: Vec<PathBuf> = Vec::new();
     if let Ok(dir) = std::env::var("MPV_DEV_DIR") {
         candidates.push(PathBuf::from(dir));
