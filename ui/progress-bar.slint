@@ -29,6 +29,8 @@ export component ProgressBar inherits Rectangle {
     in property <int> sprite-thumb-w: 160;
     in property <int> sprite-thumb-h: 90;
 
+    in property <bool> pointer-hidden: false;
+
     callback clicked-ratio(float);
 
     height: 20px;
@@ -191,6 +193,8 @@ export component ProgressBar inherits Rectangle {
     }
 
     drag := TouchArea {
+        enabled: !root.pointer-hidden;
+        mouse-cursor: root.pointer-hidden ? none : default;
         clicked => {
             if (self.width > 0px) {
                 clicked-ratio(self.mouse-x / self.width);

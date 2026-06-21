@@ -23,10 +23,12 @@ export component ImageViewer inherits Rectangle {
     // current cell and to scroll it into view when the grid opens.
     in property <[image]> gallery-thumbnails: [];
     in property <[bool]> gallery-is-video: [];
+    in property <[bool]> gallery-failed-flags: [];
     in property <int> gallery-current-index: -1;
     in property <bool> show-single-image: true;
     in property <bool> gallery-loading: false;
     in property <string> gallery-loading-message: "";
+    in property <bool> pointer-hidden: false;
 
     callback navigate(int);
     callback open-images();
@@ -74,6 +76,7 @@ export component ImageViewer inherits Rectangle {
             y: 0;
             width: hit-width;
             height: hit-height;
+            mouse-cursor: root.pointer-hidden ? none : default;
             clicked => { open-images(); }
             double-clicked => { toggle-fullscreen(); }
         }
@@ -103,6 +106,7 @@ export component ImageViewer inherits Rectangle {
             y: 0;
             width: hit-width;
             height: hit-height;
+            mouse-cursor: root.pointer-hidden ? none : default;
             clicked => { toggle-playback(); }
             double-clicked => { toggle-fullscreen(); }
         }
@@ -148,6 +152,26 @@ export component ImageViewer inherits Rectangle {
                 image-fit: cover;
             }
 
+            if i < gallery-failed-flags.length && gallery-failed-flags[i]: Rectangle {
+                x: 0;
+                y: 0;
+                width: 100%;
+                height: 100%;
+                background: #00000011;
+
+                Image {
+                    source: i < gallery-is-video.length && gallery-is-video[i]
+                        ? @image-url("icons/media-video.svg")
+                        : @image-url("icons/media-image.svg");
+                    width: 40px;
+                    height: 40px;
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    colorize: Theme.muted;
+                    opacity: 0.85;
+                }
+            }
+
             if i < gallery-is-video.length && gallery-is-video[i]: Rectangle {
                 x: 4px;
                 y: 4px;
@@ -166,17 +190,18 @@ export component ImageViewer inherits Rectangle {
             }
 
             TouchArea {
+                mouse-cursor: root.pointer-hidden ? none : default;
                 clicked => { gallery-item-clicked(i); }
             }
         }
+    }
 
-        if gallery-loading: LoadingOverlay {
-            x: 0;
-            y: 0;
-            width: hit-width;
-            height: hit-height;
-            show: true;
-            message: gallery-loading-message;
-        }
+    if gallery-loading: LoadingOverlay {
+        x: 0;
+        y: 0;
+        width: hit-width;
+        height: hit-height;
+        show: true;
+        message: gallery-loading-message;
     }
 }

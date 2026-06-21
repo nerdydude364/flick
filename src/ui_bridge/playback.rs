@@ -446,6 +446,8 @@ fn finish_import(
         app.set_gallery_open(false);
         state.pending_gallery_reload = true;
     } else if let Some(path) = single_path {
+        // Single file from picker, drop, folder scan, or OS "Open with" —
+        // jump straight into playback/view instead of the thumbnail grid.
         let Some(index) = state.all_queue.index_of_path(path) else {
             return;
         };

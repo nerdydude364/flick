@@ -28,7 +28,15 @@ pub use sprite_preview::{
 };
 pub use state::{AppState, Mode};
 
+use slint::ComponentHandle;
+use std::cell::RefCell;
 use std::path::Path;
+use std::rc::Rc;
+use std::time::Duration;
+
+thread_local! {
+    static TOAST_DISMISS_TIMER: RefCell<Option<Rc<slint::Timer>>> = const { RefCell::new(None) };
+}
 
 pub(crate) fn log_mpv_err<T>(label: &str, result: Result<T, libmpv2::Error>) -> bool {
     match result {
@@ -74,4 +82,27 @@ pub fn format_time(seconds: f64) -> String {
     } else {
         format!("{m}:{s:02}")
     }
+}
+
+pub fn show_toast(app: &crate::AppWindow, message: impl Into<slint::SharedString>, error: bool) {
+    app.set_toast_message(message.into());
+    app.set_toast_error(error);
+    app.set_toast_visible(true);
+
+    let app_weak = app.as_weak();
+    TOAST_DISMISS_TIMER.with(|slot| {
+        let timer = slot
+            .borrow_mut()
+            .get_or_insert_with(|| Rc::new(slint::Timer::default()))
+            .clone();
+        timer.start(
+            slint::TimerMode::SingleShot,
+            Duration::from_secs(2),
+            move || {
+                if let Some(app) = app_weak.upgrade() {
+                    app.set_toast_visible(false);
+                }
+            },
+        );
+    });
 }

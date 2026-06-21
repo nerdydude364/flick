@@ -169,6 +169,7 @@ fn schedule_pending_gallery_reload(
     state: Rc<RefCell<AppState>>,
     gallery_model: Rc<VecModel<slint::Image>>,
     gallery_video_flags: Rc<VecModel<bool>>,
+    gallery_failed_flags: Rc<VecModel<bool>>,
     gallery_tx: std::sync::mpsc::Sender<ui_bridge::GalleryThumbResult>,
 ) {
     if !state.borrow().pending_gallery_reload {
@@ -184,6 +185,7 @@ fn schedule_pending_gallery_reload(
             &ui_bridge::GalleryContext {
                 thumbnails: &gallery_model,
                 video_flags: &gallery_video_flags,
+                failed_flags: &gallery_failed_flags,
                 tx: &gallery_tx,
             },
         );
@@ -200,6 +202,7 @@ struct ImportWiring {
     startup_paths: Rc<RefCell<Vec<PathBuf>>>,
     gallery_model: Rc<VecModel<slint::Image>>,
     gallery_video_flags: Rc<VecModel<bool>>,
+    gallery_failed_flags: Rc<VecModel<bool>>,
     gallery_tx: std::sync::mpsc::Sender<ui_bridge::GalleryThumbResult>,
 }
 
@@ -212,6 +215,7 @@ struct AppContext {
     file_import_tx: std::sync::mpsc::Sender<import::FileImportBatch>,
     gallery_model: Rc<VecModel<slint::Image>>,
     gallery_video_flags: Rc<VecModel<bool>>,
+    gallery_failed_flags: Rc<VecModel<bool>>,
     gallery_tx: std::sync::mpsc::Sender<ui_bridge::GalleryThumbResult>,
 }
 
@@ -233,6 +237,7 @@ fn wire_video_underlay(
     let startup_paths = Rc::clone(&import_wiring.startup_paths);
     let gallery_model = Rc::clone(&import_wiring.gallery_model);
     let gallery_video_flags = Rc::clone(&import_wiring.gallery_video_flags);
+    let gallery_failed_flags = Rc::clone(&import_wiring.gallery_failed_flags);
     let gallery_tx = import_wiring.gallery_tx.clone();
     app.window()
         .set_rendering_notifier(move |rendering_state, graphics_api| match rendering_state {
@@ -258,6 +263,7 @@ fn wire_video_underlay(
                         let gallery = ui_bridge::GalleryContext {
                             thumbnails: &gallery_model,
                             video_flags: &gallery_video_flags,
+                            failed_flags: &gallery_failed_flags,
                             tx: &gallery_tx,
                         };
                         import::import_paths(
@@ -426,17 +432,28 @@ fn wire_playback_controls(app: &AppWindow, mpv: &Rc<Mpv>, state: &Rc<RefCell<App
 
     {
         let mpv = Rc::clone(mpv);
+        let app_weak = app.as_weak();
         app.on_take_screenshot(move || {
+            let Some(app) = app_weak.upgrade() else {
+                return;
+            };
             let dir = dirs::picture_dir().unwrap_or_else(std::env::temp_dir);
             let timestamp = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_secs();
             let path = dir.join(format!("Flick-Screenshot-{timestamp}.png"));
-            ui_bridge::log_mpv_err(
-                "screenshot",
-                mpv.command("screenshot-to-file", &[&path.to_string_lossy(), "video"]),
-            );
+            match mpv.command("screenshot-to-file", &[&path.to_string_lossy(), "video"]) {
+                Ok(_) => ui_bridge::show_toast(
+                    &app,
+                    format!("Screenshot saved to {}", path.display()),
+                    false,
+                ),
+                Err(err) => {
+                    eprintln!("screenshot failed: {err}");
+                    ui_bridge::show_toast(&app, format!("Screenshot failed: {err}"), true);
+                }
+            }
         });
     }
 
@@ -518,6 +535,7 @@ fn wire_queue_management(app: &AppWindow, ctx: &AppContext) {
         let file_import_tx = ctx.file_import_tx.clone();
         let gallery_model = Rc::clone(&ctx.gallery_model);
         let gallery_video_flags = Rc::clone(&ctx.gallery_video_flags);
+        let gallery_failed_flags = Rc::clone(&ctx.gallery_failed_flags);
         let gallery_tx = ctx.gallery_tx.clone();
         let open_media: Rc<dyn Fn()> = Rc::new(move || {
             let Some(app) = app_weak.upgrade() else {
@@ -538,6 +556,7 @@ fn wire_queue_management(app: &AppWindow, ctx: &AppContext) {
                     gallery: ui_bridge::GalleryContext {
                         thumbnails: &gallery_model,
                         video_flags: &gallery_video_flags,
+                        failed_flags: &gallery_failed_flags,
                         tx: &gallery_tx,
                     },
                 },
@@ -557,6 +576,7 @@ fn wire_queue_management(app: &AppWindow, ctx: &AppContext) {
         let app_weak = app.as_weak();
         let gallery_model = Rc::clone(&ctx.gallery_model);
         let gallery_video_flags = Rc::clone(&ctx.gallery_video_flags);
+        let gallery_failed_flags = Rc::clone(&ctx.gallery_failed_flags);
         let gallery_tx = ctx.gallery_tx.clone();
         app.on_set_view_mode(move |mode| {
             let Some(app) = app_weak.upgrade() else {
@@ -570,6 +590,7 @@ fn wire_queue_management(app: &AppWindow, ctx: &AppContext) {
             let gallery = ui_bridge::GalleryContext {
                 thumbnails: &gallery_model,
                 video_flags: &gallery_video_flags,
+                failed_flags: &gallery_failed_flags,
                 tx: &gallery_tx,
             };
             ui_bridge::set_mode(
@@ -585,6 +606,7 @@ fn wire_queue_management(app: &AppWindow, ctx: &AppContext) {
                 Rc::clone(&state),
                 Rc::clone(&gallery_model),
                 Rc::clone(&gallery_video_flags),
+                Rc::clone(&gallery_failed_flags),
                 gallery_tx.clone(),
             );
         });
@@ -675,6 +697,7 @@ fn wire_image_viewer(
         let gallery_tx = ctx.gallery_tx.clone();
         let slideshow_timer = Rc::clone(&slideshow_timer);
         let gallery_video_flags = Rc::clone(&ctx.gallery_video_flags);
+        let gallery_failed_flags = Rc::clone(&ctx.gallery_failed_flags);
         let app_weak = app.as_weak();
         app.on_toggle_gallery(move || {
             let Some(app) = app_weak.upgrade() else {
@@ -683,6 +706,7 @@ fn wire_image_viewer(
             let gallery = ui_bridge::GalleryContext {
                 thumbnails: &gallery_model,
                 video_flags: &gallery_video_flags,
+                failed_flags: &gallery_failed_flags,
                 tx: &gallery_tx,
             };
             ui_bridge::toggle_gallery(&mpv, &app, &mut state.borrow_mut(), &gallery);
@@ -692,6 +716,7 @@ fn wire_image_viewer(
                 Rc::clone(&state),
                 Rc::clone(&gallery_model),
                 Rc::clone(&gallery_video_flags),
+                Rc::clone(&gallery_failed_flags),
                 gallery_tx.clone(),
             );
             if !app.get_slideshow_on() {
@@ -822,6 +847,21 @@ fn wire_folder_scan(app: &AppWindow, scan_tx: std::sync::mpsc::Sender<Vec<librar
             library::scan_folder(&folder, |batch| {
                 let _ = tx.send(batch);
             });
+        });
+    });
+}
+
+/// Syncs the OS cursor with chrome auto-hide. Slint's TouchArea `mouse-cursor`
+/// only updates on pointer events; winit hides immediately when chrome fades.
+fn wire_chrome_cursor_hiding(app: &AppWindow) {
+    use slint::winit_030::WinitWindowAccessor;
+    let app_weak = app.as_weak();
+    app.on_chrome_visibility_changed(move |chrome_visible| {
+        let Some(app) = app_weak.upgrade() else {
+            return;
+        };
+        app.window().with_winit_window(|winit_window| {
+            winit_window.set_cursor_visible(chrome_visible);
         });
     });
 }
@@ -1094,6 +1134,8 @@ fn main() {
     app.set_gallery_thumbnails(slint::ModelRc::from(gallery_model.clone()));
     let gallery_video_flags: Rc<VecModel<bool>> = Rc::new(VecModel::default());
     app.set_gallery_is_video(slint::ModelRc::from(gallery_video_flags.clone()));
+    let gallery_failed_flags: Rc<VecModel<bool>> = Rc::new(VecModel::default());
+    app.set_gallery_failed_flags(slint::ModelRc::from(gallery_failed_flags.clone()));
     app.set_view_mode(2);
 
     // Debounced thumbnail-sprite generation, triggered when the user selects
@@ -1107,14 +1149,10 @@ fn main() {
     // `ui_bridge::gallery`'s doc comments. Drained by the same timer below.
     let (gallery_tx, gallery_rx) = std::sync::mpsc::channel::<ui_bridge::GalleryThumbResult>();
 
-    // Paths from CLI args ("Open with Flick", shell association) are imported
-    // once the mpv render context exists — see `wire_video_underlay`.
-    let startup_paths = Rc::new(RefCell::new(
-        std::env::args()
-            .skip(1)
-            .map(PathBuf::from)
-            .collect::<Vec<_>>(),
-    ));
+    // Paths from CLI / "Open with Flick" — queued once mpv's render context
+    // exists (see `wire_video_underlay`). Same import pipeline as the file
+    // picker; one valid file auto-plays, two or more open the grid.
+    let startup_paths = Rc::new(RefCell::new(import::launch_paths_from_argv()));
 
     let (scan_tx, scan_rx) = std::sync::mpsc::channel::<Vec<library::ScannedFile>>();
     let (file_import_tx, file_import_rx) = std::sync::mpsc::channel::<import::FileImportBatch>();
@@ -1131,6 +1169,7 @@ fn main() {
             startup_paths: Rc::clone(&startup_paths),
             gallery_model: Rc::clone(&gallery_model),
             gallery_video_flags: Rc::clone(&gallery_video_flags),
+            gallery_failed_flags: Rc::clone(&gallery_failed_flags),
             gallery_tx: gallery_tx.clone(),
         },
     );
@@ -1143,6 +1182,7 @@ fn main() {
         file_import_tx: file_import_tx.clone(),
         gallery_model: Rc::clone(&gallery_model),
         gallery_video_flags: Rc::clone(&gallery_video_flags),
+        gallery_failed_flags: Rc::clone(&gallery_failed_flags),
         gallery_tx: gallery_tx.clone(),
     };
     wire_queue_management(&app, &app_ctx);
@@ -1159,6 +1199,7 @@ fn main() {
     // plain `PathBuf`s plus that already-computed metadata.
     wire_folder_scan(&app, scan_tx.clone());
     wire_file_drop(&app, drop_tx);
+    wire_chrome_cursor_hiding(&app);
 
     {
         let mpv = Rc::clone(&mpv);
@@ -1186,6 +1227,8 @@ fn main() {
                         &mut state.borrow_mut(),
                         &app,
                         &gallery_model,
+                        &gallery_failed_flags,
+                        &model,
                         result,
                     );
                 }
@@ -1202,6 +1245,7 @@ fn main() {
                             gallery: ui_bridge::GalleryContext {
                                 thumbnails: &gallery_model,
                                 video_flags: &gallery_video_flags,
+                                failed_flags: &gallery_failed_flags,
                                 tx: &gallery_tx,
                             },
                         },
@@ -1224,6 +1268,7 @@ fn main() {
                             gallery: ui_bridge::GalleryContext {
                                 thumbnails: &gallery_model,
                                 video_flags: &gallery_video_flags,
+                                failed_flags: &gallery_failed_flags,
                                 tx: &gallery_tx,
                             },
                         },
@@ -1263,6 +1308,7 @@ fn main() {
                         &ui_bridge::GalleryContext {
                             thumbnails: &gallery_model,
                             video_flags: &gallery_video_flags,
+                            failed_flags: &gallery_failed_flags,
                             tx: &gallery_tx,
                         },
                     );
@@ -1272,6 +1318,7 @@ fn main() {
                     let gallery = ui_bridge::GalleryContext {
                         thumbnails: &gallery_model,
                         video_flags: &gallery_video_flags,
+                        failed_flags: &gallery_failed_flags,
                         tx: &gallery_tx,
                     };
                     let mut state_ref = state.borrow_mut();

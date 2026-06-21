@@ -1,4 +1,4 @@
-use super::rebuild_playlist_model;
+use super::loading::patch_sprite_status_for_hash;
 use super::state::{AppState, Mode, SpriteStatus};
 use crate::thumbnails;
 use crate::{AppWindow, PlaylistItemData};
@@ -65,6 +65,37 @@ pub fn sync_sprite_preview(app: &AppWindow, state: &mut AppState) {
     }
 }
 
+fn sprite_meta_from_app(app: &AppWindow) -> thumbnails::SpriteMeta {
+    thumbnails::SpriteMeta {
+        interval_sec: app.get_sprite_interval_sec() as f64,
+        frame_count: app.get_sprite_frame_count() as u32,
+        columns: app.get_sprite_columns() as u32,
+        rows: app.get_sprite_rows() as u32,
+        thumb_width: app.get_sprite_thumb_w() as u32,
+        thumb_height: app.get_sprite_thumb_h() as u32,
+    }
+}
+
+fn now_playing_index(state: &AppState) -> Option<usize> {
+    match state.mode {
+        Mode::Video => state.queue.now_playing(),
+        Mode::All => state.all_queue.now_playing(),
+        Mode::Image => None,
+    }
+}
+
+fn load_sprite_for_list_preview(
+    app: &AppWindow,
+    state: &AppState,
+    queue_index: usize,
+    hash: &str,
+) -> Option<(slint::Image, thumbnails::SpriteMeta)> {
+    if now_playing_index(state) == Some(queue_index) && app.get_sprite_ready() {
+        return Some((app.get_sprite_image(), sprite_meta_from_app(app)));
+    }
+    thumbnails::load_cached_sprite(hash)
+}
+
 fn apply_sprite_meta_to_ui(app: &AppWindow, meta: &thumbnails::SpriteMeta, image: slint::Image) {
     app.set_sprite_image(image);
     app.set_sprite_interval_sec(meta.interval_sec as f32);
@@ -128,7 +159,7 @@ pub fn show_list_sprite_preview(app: &AppWindow, state: &mut AppState, queue_ind
         hide_list_sprite_preview(app);
         return;
     };
-    let Some((image, meta)) = thumbnails::load_cached_sprite(&hash) else {
+    let Some((image, meta)) = load_sprite_for_list_preview(app, state, queue_index, &hash) else {
         hide_list_sprite_preview(app);
         return;
     };
@@ -211,7 +242,7 @@ pub fn schedule_sprite_generation(
                 .insert(hash.clone(), SpriteStatus::InProgress);
             app.set_sprite_ready(false);
             app.set_sprite_loading(true);
-            rebuild_playlist_model(&mut state_ref, &model);
+            patch_sprite_status_for_hash(&mut state_ref, &model, &hash, SpriteStatus::InProgress);
             drop(state_ref);
 
             let tx = sprite_tx.clone();
@@ -236,26 +267,21 @@ pub fn apply_sprite_result(
     hash: String,
     ok: bool,
 ) {
-    state.sprite_status.insert(
-        hash.clone(),
-        if ok {
-            SpriteStatus::Done
-        } else {
-            SpriteStatus::NotStarted
-        },
-    );
+    let status = if ok {
+        SpriteStatus::Done
+    } else {
+        SpriteStatus::NotStarted
+    };
+    state.sprite_status.insert(hash.clone(), status);
     if ok {
-        let path = state
-            .queue
-            .now_playing()
-            .and_then(|index| state.queue.item(index).map(|item| item.path.clone()));
-        if let Some(path) = path
-            && state.sprite_hash_for(&path).as_deref() == Some(hash.as_str())
+        let path = current_video_path(state);
+        if path.is_some()
+            && state.sprite_hash_for(path.as_ref().unwrap()).as_deref() == Some(hash.as_str())
         {
             sync_sprite_preview(app, state);
         }
     } else {
         app.set_sprite_loading(false);
     }
-    rebuild_playlist_model(state, model);
+    patch_sprite_status_for_hash(state, model, &hash, status);
 }
