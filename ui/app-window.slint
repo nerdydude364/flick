@@ -110,9 +110,10 @@ export component AppWindow inherits Window {
     // Prev/next walks the active mode's queue (All uses navigate-image → Rust all_queue).
     property <bool> queue-navigate-transport: all-mode && gallery-open;
     property <bool> show-video-scrub: show-video-transport && !slideshow-on;
-    // Thumbnail grid, or loading into it — chrome is hidden so the grid can fill the window.
+    // Thumbnail grid, or loading into it — bottom chrome is hidden so the grid
+    // can use more vertical space; the sidebar stays visible in all views.
     property <bool> gallery-grid-view: !gallery-open && (has-library-items || library-loading);
-    property <length> chrome-sidebar-w: gallery-grid-view ? 0px : (sidebar-open ? Theme.sidebar-width : 0px);
+    property <length> chrome-sidebar-w: sidebar-open ? Theme.sidebar-width : 0px;
     property <length> chrome-bottom-h: gallery-grid-view ? 0px : bottom-h;
 
     // Manual, persistent drawer state (toggled via the handle next to the
@@ -261,7 +262,7 @@ export component AppWindow inherits Window {
             y: 0;
             width: chrome-sidebar-w;
             height: 100%;
-            opacity: (chrome-visible && !gallery-grid-view) ? 1.0 : 0.0;
+            opacity: chrome-visible ? 1.0 : 0.0;
             pointer-hidden: pointer-hidden;
             library-loading: library-loading;
             library-loading-message: library-loading-message;
@@ -283,8 +284,8 @@ export component AppWindow inherits Window {
             animate opacity { duration: 200ms; }
         }
 
-        // Drawer handle — hidden in gallery grid so the grid can use full width.
-        if !gallery-grid-view: IconButton {
+        // Drawer handle — toggles sidebar width in every view.
+        IconButton {
             x: sidebar.x - self.width - 4px;
             y: 16px;
             size: 32px;
