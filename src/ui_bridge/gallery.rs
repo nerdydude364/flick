@@ -4,7 +4,9 @@ use crate::library::{MediaKind, media_kind};
 use libmpv2::Mpv;
 use slint::{Model, VecModel};
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::sync::mpsc::Sender;
+use std::sync::{Condvar, Mutex};
 
 const CONCURRENCY: usize = 8;
 
@@ -141,7 +143,7 @@ fn prime_gallery_loading_state(state: &mut AppState) {
     state.gallery_thumbs_loaded = 0;
 }
 
-fn sync_loading_ui(app: &AppWindow, state: &AppState) {
+fn sync_loading_ui(app: &AppWindow, state: &mut AppState) {
     super::loading::sync_loading_ui(app, state);
 }
 
@@ -194,6 +196,51 @@ fn gallery_source(state: &AppState) -> Option<(Vec<usize>, Vec<PathBuf>, Vec<boo
     }
 }
 
+fn thumb_focus_index(state: &AppState) -> usize {
+    let now_playing = match state.mode {
+        Mode::Video => state.queue.now_playing(),
+        Mode::Image => state.image_queue.now_playing(),
+        Mode::All => state.all_queue.now_playing(),
+    };
+    now_playing
+        .and_then(|idx| state.gallery_order.iter().position(|&i| i == idx))
+        .unwrap_or(0)
+}
+
+fn thumb_work_order(len: usize, focus: usize) -> Vec<usize> {
+    let mut order: Vec<usize> = (0..len).collect();
+    order.sort_by_key(|&i| i.abs_diff(focus));
+    order
+}
+
+struct ConcurrencyGate {
+    slots: Mutex<usize>,
+    available: Condvar,
+}
+
+impl ConcurrencyGate {
+    fn new(limit: usize) -> Self {
+        Self {
+            slots: Mutex::new(limit),
+            available: Condvar::new(),
+        }
+    }
+
+    fn acquire(&self) {
+        let mut slots = self.slots.lock().unwrap();
+        while *slots == 0 {
+            slots = self.available.wait(slots).unwrap();
+        }
+        *slots -= 1;
+    }
+
+    fn release(&self) {
+        let mut slots = self.slots.lock().unwrap();
+        *slots += 1;
+        self.available.notify_one();
+    }
+}
+
 fn load_gallery_thumbnails(state: &mut AppState, gallery: &GalleryContext<'_>) {
     let Some((order, paths, is_video)) = gallery_source(state) else {
         state.gallery_order.clear();
@@ -217,26 +264,29 @@ fn load_gallery_thumbnails(state: &mut AppState, gallery: &GalleryContext<'_>) {
     }
     gallery.video_flags.set_vec(is_video.clone());
 
+    let focus = thumb_focus_index(state);
+    let work_order = thumb_work_order(paths.len(), focus);
     let tx = gallery.tx.clone();
     std::thread::spawn(move || {
-        for batch_start in (0..paths.len()).step_by(CONCURRENCY) {
-            let batch_end = (batch_start + CONCURRENCY).min(paths.len());
-            std::thread::scope(|scope| {
-                for (offset, path) in paths[batch_start..batch_end].iter().enumerate() {
-                    let tx = tx.clone();
-                    let pos = batch_start + offset;
-                    let is_vid = is_video[pos];
-                    scope.spawn(move || {
-                        let hash = if is_vid {
-                            crate::thumbnails::ensure_video_poster_cached(path)
-                        } else {
-                            crate::thumbnails::ensure_poster_cached(path)
-                        };
-                        let _ = tx.send((generation, pos, hash));
-                    });
-                }
-            });
-        }
+        let gate = Arc::new(ConcurrencyGate::new(CONCURRENCY));
+        std::thread::scope(|scope| {
+            for pos in work_order {
+                let path = paths[pos].clone();
+                let is_vid = is_video[pos];
+                let tx = tx.clone();
+                let gate = Arc::clone(&gate);
+                scope.spawn(move || {
+                    gate.acquire();
+                    let hash = if is_vid {
+                        crate::thumbnails::ensure_video_poster_cached(&path)
+                    } else {
+                        crate::thumbnails::ensure_poster_cached(&path)
+                    };
+                    gate.release();
+                    let _ = tx.send((generation, pos, hash));
+                });
+            }
+        });
     });
 }
 
@@ -258,5 +308,9 @@ pub fn apply_gallery_thumb(
     if state.gallery_thumbs_loaded < state.gallery_thumbs_pending {
         state.gallery_thumbs_loaded += 1;
     }
-    super::loading::sync_loading_ui(app, state);
+    let loaded = state.gallery_thumbs_loaded;
+    let pending = state.gallery_thumbs_pending;
+    if loaded == pending || loaded.is_multiple_of(8) {
+        super::loading::sync_loading_ui(app, state);
+    }
 }
