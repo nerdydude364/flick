@@ -24,7 +24,8 @@ fn playlist_busy(state: &AppState) -> bool {
 }
 
 fn gallery_busy(state: &AppState) -> bool {
-    state.gallery_thumbs_pending > 0 && state.gallery_thumbs_loaded < state.gallery_thumbs_pending
+    state.gallery_thumbs_pending > 0
+        && state.gallery_thumbs_loaded + state.gallery_thumbs_failed < state.gallery_thumbs_pending
 }
 
 fn compose_loading_message(state: &AppState) -> String {
@@ -35,11 +36,13 @@ fn compose_loading_message(state: &AppState) -> String {
         let label = if job.sprite_pass { "previews" } else { "items" };
         parts.push(format!("{label} {done}/{total}"));
     }
-    if gallery_busy(state) {
-        parts.push(format!(
-            "thumbs {}/{}",
-            state.gallery_thumbs_loaded, state.gallery_thumbs_pending
-        ));
+    if state.gallery_thumbs_pending > 0 {
+        let done = state.gallery_thumbs_loaded + state.gallery_thumbs_failed;
+        let mut message = format!("thumbs {done}/{}", state.gallery_thumbs_pending);
+        if state.gallery_thumbs_failed > 0 {
+            message.push_str(&format!(" ({} failed)", state.gallery_thumbs_failed));
+        }
+        parts.push(message);
     }
     if parts.is_empty() {
         if state.library_loading_message.is_empty() {

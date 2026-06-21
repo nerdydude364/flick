@@ -80,6 +80,7 @@ export component AppWindow inherits Window {
     in property <string> slideshow-duration-text: "8s";
     in property <[image]> gallery-thumbnails: [];
     in property <[bool]> gallery-is-video: [];
+    in property <[bool]> gallery-failed-flags: [];
     in property <bool> library-loading: false;
     in property <string> library-loading-message: "";
     in property <bool> gallery-loading: false;
@@ -220,6 +221,7 @@ export component AppWindow inherits Window {
             rotation-deg: image-rotation-deg;
             gallery-thumbnails: gallery-thumbnails;
             gallery-is-video: gallery-is-video;
+            gallery-failed-flags: gallery-failed-flags;
             gallery-loading: gallery-loading;
             gallery-loading-message: library-loading-message;
             gallery-current-index: counter-position - 1;

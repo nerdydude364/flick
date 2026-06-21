@@ -23,6 +23,7 @@ export component ImageViewer inherits Rectangle {
     // current cell and to scroll it into view when the grid opens.
     in property <[image]> gallery-thumbnails: [];
     in property <[bool]> gallery-is-video: [];
+    in property <[bool]> gallery-failed-flags: [];
     in property <int> gallery-current-index: -1;
     in property <bool> show-single-image: true;
     in property <bool> gallery-loading: false;
@@ -146,6 +147,26 @@ export component ImageViewer inherits Rectangle {
                 height: 100%;
                 source: thumb;
                 image-fit: cover;
+            }
+
+            if i < gallery-failed-flags.length && gallery-failed-flags[i]: Rectangle {
+                x: 0;
+                y: 0;
+                width: 100%;
+                height: 100%;
+                background: #00000011;
+
+                Image {
+                    source: i < gallery-is-video.length && gallery-is-video[i]
+                        ? @image-url("icons/media-video.svg")
+                        : @image-url("icons/media-image.svg");
+                    width: 40px;
+                    height: 40px;
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    colorize: Theme.muted;
+                    opacity: 0.85;
+                }
             }
 
             if i < gallery-is-video.length && gallery-is-video[i]: Rectangle {

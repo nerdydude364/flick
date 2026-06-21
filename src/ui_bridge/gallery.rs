@@ -16,6 +16,7 @@ pub type GalleryThumbResult = (u64, usize, Option<String>);
 pub struct GalleryContext<'a> {
     pub thumbnails: &'a VecModel<slint::Image>,
     pub video_flags: &'a VecModel<bool>,
+    pub failed_flags: &'a VecModel<bool>,
     pub tx: &'a Sender<GalleryThumbResult>,
 }
 
@@ -136,11 +137,13 @@ fn prime_gallery_loading_state(state: &mut AppState) {
         state.gallery_order.clear();
         state.gallery_thumbs_pending = 0;
         state.gallery_thumbs_loaded = 0;
+        state.gallery_thumbs_failed = 0;
         return;
     };
     state.gallery_order = order;
     state.gallery_thumbs_pending = paths.len();
     state.gallery_thumbs_loaded = 0;
+    state.gallery_thumbs_failed = 0;
 }
 
 fn sync_loading_ui(app: &AppWindow, state: &mut AppState) {
@@ -246,8 +249,10 @@ fn load_gallery_thumbnails(state: &mut AppState, gallery: &GalleryContext<'_>) {
         state.gallery_order.clear();
         state.gallery_thumbs_pending = 0;
         state.gallery_thumbs_loaded = 0;
+        state.gallery_thumbs_failed = 0;
         gallery.thumbnails.set_vec(Vec::new());
         gallery.video_flags.set_vec(Vec::new());
+        gallery.failed_flags.set_vec(Vec::new());
         return;
     };
 
@@ -257,17 +262,17 @@ fn load_gallery_thumbnails(state: &mut AppState, gallery: &GalleryContext<'_>) {
     state.gallery_thumbs_pending = paths.len();
     state.gallery_thumbs_loaded = 0;
 
-    if gallery.thumbnails.row_count() != paths.len() {
-        gallery
-            .thumbnails
-            .set_vec(vec![slint::Image::default(); paths.len()]);
-    }
+    gallery
+        .thumbnails
+        .set_vec(vec![slint::Image::default(); paths.len()]);
     gallery.video_flags.set_vec(is_video.clone());
+    gallery.failed_flags.set_vec(vec![false; paths.len()]);
 
     let focus = thumb_focus_index(state);
     let work_order = thumb_work_order(paths.len(), focus);
     let tx = gallery.tx.clone();
     std::thread::spawn(move || {
+        const RETRIES: usize = 3;
         let gate = Arc::new(ConcurrencyGate::new(CONCURRENCY));
         std::thread::scope(|scope| {
             for pos in work_order {
@@ -277,11 +282,23 @@ fn load_gallery_thumbnails(state: &mut AppState, gallery: &GalleryContext<'_>) {
                 let gate = Arc::clone(&gate);
                 scope.spawn(move || {
                     gate.acquire();
-                    let hash = if is_vid {
-                        crate::thumbnails::ensure_video_poster_cached(&path)
-                    } else {
-                        crate::thumbnails::ensure_poster_cached(&path)
-                    };
+                    let mut hash: Option<String> = None;
+                    for _attempt in 0..RETRIES {
+                        hash = if is_vid {
+                            crate::thumbnails::ensure_video_poster_cached(&path)
+                        } else {
+                            crate::thumbnails::ensure_poster_cached(&path)
+                        };
+                        if let Some(ref h) = hash {
+                            // make sure the cache file is visible on disk before
+                            // telling the UI thread to try loading it.
+                            let p = crate::thumbnails::cache::poster_file(h);
+                            if p.exists() {
+                                break;
+                            }
+                        }
+                        std::thread::sleep(std::time::Duration::from_millis(50));
+                    }
                     gate.release();
                     let _ = tx.send((generation, pos, hash));
                 });
@@ -294,23 +311,30 @@ pub fn apply_gallery_thumb(
     state: &mut AppState,
     app: &AppWindow,
     gallery_model: &VecModel<slint::Image>,
+    failed_flags: &VecModel<bool>,
     result: GalleryThumbResult,
 ) {
     let (generation, pos, hash) = result;
     if generation != state.gallery_generation || pos >= gallery_model.row_count() {
         return;
     }
-    if let Some(hash) = hash
+    let success = if let Some(hash) = hash
         && let Some(image) = crate::thumbnails::load_cached_poster(&hash)
     {
         gallery_model.set_row_data(pos, image);
+        true
+    } else {
+        failed_flags.set_row_data(pos, true);
+        false
+    };
+    if success {
+        state.gallery_thumbs_loaded = state.gallery_thumbs_loaded.saturating_add(1);
+    } else {
+        state.gallery_thumbs_failed = state.gallery_thumbs_failed.saturating_add(1);
     }
-    if state.gallery_thumbs_loaded < state.gallery_thumbs_pending {
-        state.gallery_thumbs_loaded += 1;
-    }
-    let loaded = state.gallery_thumbs_loaded;
+    let done = state.gallery_thumbs_loaded + state.gallery_thumbs_failed;
     let pending = state.gallery_thumbs_pending;
-    if loaded == pending || loaded.is_multiple_of(8) {
+    if done == pending || done.is_multiple_of(8) {
         super::loading::sync_loading_ui(app, state);
     }
 }

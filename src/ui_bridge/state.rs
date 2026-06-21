@@ -80,6 +80,7 @@ pub struct AppState {
     pub library_loading_message: String,
     pub gallery_thumbs_pending: usize,
     pub gallery_thumbs_loaded: usize,
+    pub gallery_thumbs_failed: usize,
     /// Heavy thumbnail rebuild deferred until after the grid shell paints.
     pub pending_gallery_reload: bool,
 }
@@ -110,6 +111,7 @@ impl AppState {
             library_loading_message: String::new(),
             gallery_thumbs_pending: 0,
             gallery_thumbs_loaded: 0,
+            gallery_thumbs_failed: 0,
             pending_gallery_reload: false,
         }
     }
