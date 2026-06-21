@@ -693,10 +693,10 @@ export component AppWindow inherits Window {
             }
         }
 
-        if toast-visible: Toast {
-            x: 16px;
-            y: parent.height - chrome-bottom-h - self.height - 12px;
-            width: parent.width - chrome-sidebar-w - 32px;
+        Toast {
+            x: (parent.width - chrome-sidebar-w - self.width) / 2;
+            y: 12px;
+            max-message-width: parent.width - chrome-sidebar-w - 32px;
             show <=> root.toast-visible;
             message: root.toast-message;
             error: root.toast-error;
