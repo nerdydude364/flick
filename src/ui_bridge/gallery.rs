@@ -312,16 +312,18 @@ pub fn apply_gallery_thumb(
     app: &AppWindow,
     gallery_model: &VecModel<slint::Image>,
     failed_flags: &VecModel<bool>,
+    playlist_model: &VecModel<crate::PlaylistItemData>,
     result: GalleryThumbResult,
 ) {
     let (generation, pos, hash) = result;
     if generation != state.gallery_generation || pos >= gallery_model.row_count() {
         return;
     }
-    let success = if let Some(hash) = hash
-        && let Some(image) = crate::thumbnails::load_cached_poster(&hash)
+    let success = if let Some(ref hash) = hash
+        && let Some(image) = crate::thumbnails::load_cached_poster(hash)
     {
         gallery_model.set_row_data(pos, image);
+        super::loading::patch_playlist_thumbnail_for_hash(state, playlist_model, hash);
         true
     } else {
         failed_flags.set_row_data(pos, true);

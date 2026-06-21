@@ -8,8 +8,6 @@ use std::cell::RefCell;
 use std::path::PathBuf;
 use std::rc::Rc;
 
-pub type FileImportBatch = Vec<(String, PathBuf, Option<u64>)>;
-
 /// Splits filesystem paths into regular files vs directories (folders are
 /// scanned recursively, same as the Open Folder action).
 pub fn partition_paths(paths: impl IntoIterator<Item = PathBuf>) -> (Vec<PathBuf>, Vec<PathBuf>) {
@@ -23,6 +21,22 @@ pub fn partition_paths(paths: impl IntoIterator<Item = PathBuf>) -> (Vec<PathBuf
         }
     }
     (files, folders)
+}
+
+pub type FileImportBatch = Vec<(String, PathBuf, Option<u64>)>;
+
+/// CLI args and OS "Open with Flick" launches (file associations, Finder /
+/// Explorer "Open with", etc.). Keeps only paths that exist — existing media
+/// files and folders — so startup uses the same import path as the file
+/// picker and drag-and-drop. A single valid item then auto-plays via
+/// `enqueue_paths` → `finish_import` (grid view only when count >= 2).
+pub fn launch_paths_from_argv() -> Vec<PathBuf> {
+    let candidates: Vec<PathBuf> = std::env::args().skip(1).map(PathBuf::from).collect();
+    let existing: Vec<PathBuf> = candidates.into_iter().filter(|p| p.exists()).collect();
+    let (files, folders) = partition_paths(existing);
+    let mut paths = library::filter_valid_media(files);
+    paths.extend(folders);
+    paths
 }
 
 pub fn named_media_entries(files: Vec<PathBuf>) -> FileImportBatch {
@@ -60,7 +74,8 @@ pub struct ImportContext<'a> {
 }
 
 /// Loads media files into the queue and kicks off background folder scans —
-/// shared by the file picker, drag-and-drop, and CLI / "Open with" launches.
+/// shared by the file picker, drag-and-drop, CLI args, and OS "Open with"
+/// file-association launches (all converge on `enqueue_paths` / `finish_import`).
 pub fn import_paths(paths: Vec<PathBuf>, ctx: &ImportContext<'_>) {
     if paths.is_empty() {
         return;

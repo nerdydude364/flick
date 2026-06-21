@@ -56,7 +56,8 @@ pub struct PlaylistRebuildJob {
     pub now_playing: Option<usize>,
     pub show_sprite_status: bool,
     pub next_index: usize,
-    /// First pass skips disk-heavy sprite lookups; a follow-up pass fills glyphs.
+    /// First pass skips disk-heavy sprite lookups and poster decodes; a
+    /// follow-up pass fills glyphs and row thumbnails.
     pub defer_sprite_status: bool,
     pub sprite_pass: bool,
 }
@@ -75,7 +76,11 @@ fn compose_loading_message(state: &AppState) -> String {
     if let Some(job) = state.pending_playlist_rebuild.as_ref() {
         let total = job.filtered.len();
         let done = job.next_index.min(total);
-        let label = if job.sprite_pass { "previews" } else { "items" };
+        let label = if job.sprite_pass {
+            "previews"
+        } else {
+            "items"
+        };
         parts.push(format!("{label} {done}/{total}"));
     }
     if state.gallery_thumbs_pending > 0 {
@@ -206,18 +211,9 @@ pub fn tick_playlist_rebuild(
         return;
     }
 
-    if defer_sprite_status
-        && show_sprite_status
-        && !sprite_pass
-        && filtered.iter().any(|&i| {
-            let path = match state.mode {
-                Mode::Video => state.queue.item(i),
-                Mode::Image => state.image_queue.item(i),
-                Mode::All => state.all_queue.item(i),
-            };
-            path.is_some_and(|item| media_kind(&item.path) == MediaKind::Video)
-        })
-    {
+    if defer_sprite_status && !sprite_pass {
+        // Second pass: fill row thumbnails (and sprite-status glyphs when
+        // applicable). Pass 1 only installs placeholders for responsiveness.
         state.pending_playlist_rebuild = Some(PlaylistRebuildJob {
             filtered,
             now_playing,
@@ -269,6 +265,41 @@ pub(crate) fn patch_sprite_status_for_hash(
             continue;
         };
         row.sprite_status = glyph.into();
+        model.set_row_data(display_index, row);
+    }
+}
+
+/// Updates sidebar row thumbnail(s) once a poster lands in the disk cache —
+/// e.g. after the gallery grid finishes generating a thumb the list can reuse.
+pub(crate) fn patch_playlist_thumbnail_for_hash(
+    state: &mut AppState,
+    model: &VecModel<PlaylistItemData>,
+    hash: &str,
+) {
+    if !crate::thumbnails::cache::is_poster_cached(hash) {
+        return;
+    }
+    let Some(image) = poster_image_for_hash(hash) else {
+        return;
+    };
+    let (filtered, _, _) = playlist_view(state);
+    for (display_index, &queue_index) in filtered.iter().enumerate() {
+        let item = match state.mode {
+            Mode::Video => state.queue.item(queue_index),
+            Mode::Image => state.image_queue.item(queue_index),
+            Mode::All => state.all_queue.item(queue_index),
+        };
+        let Some(item) = item else {
+            continue;
+        };
+        let path = item.path.clone();
+        if state.sprite_hash_for(&path).as_deref() != Some(hash) {
+            continue;
+        }
+        let Some(mut row) = model.row_data(display_index) else {
+            continue;
+        };
+        row.thumbnail = image.clone();
         model.set_row_data(display_index, row);
     }
 }

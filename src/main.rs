@@ -1138,14 +1138,10 @@ fn main() {
     // `ui_bridge::gallery`'s doc comments. Drained by the same timer below.
     let (gallery_tx, gallery_rx) = std::sync::mpsc::channel::<ui_bridge::GalleryThumbResult>();
 
-    // Paths from CLI args ("Open with Flick", shell association) are imported
-    // once the mpv render context exists — see `wire_video_underlay`.
-    let startup_paths = Rc::new(RefCell::new(
-        std::env::args()
-            .skip(1)
-            .map(PathBuf::from)
-            .collect::<Vec<_>>(),
-    ));
+    // Paths from CLI / "Open with Flick" — queued once mpv's render context
+    // exists (see `wire_video_underlay`). Same import pipeline as the file
+    // picker; one valid file auto-plays, two or more open the grid.
+    let startup_paths = Rc::new(RefCell::new(import::launch_paths_from_argv()));
 
     let (scan_tx, scan_rx) = std::sync::mpsc::channel::<Vec<library::ScannedFile>>();
     let (file_import_tx, file_import_rx) = std::sync::mpsc::channel::<import::FileImportBatch>();
@@ -1221,6 +1217,7 @@ fn main() {
                         &app,
                         &gallery_model,
                         &gallery_failed_flags,
+                        &model,
                         result,
                     );
                 }
