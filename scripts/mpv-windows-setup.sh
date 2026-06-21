@@ -127,7 +127,8 @@ if [ -z "$dev_root" ]; then
 fi
 if [ -z "$runtime_root" ]; then
   echo "FAILED: could not locate runtime root in downloaded runtime archive" >&2
-
+  exit 1
+fi
 cp -f "$dev_root/libmpv-2.dll" "$MPV_DIR/bin/"
 if [ -d "$dev_root/include" ]; then
   cp -a "$dev_root/include" "$MPV_DIR/"
