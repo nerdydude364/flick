@@ -1227,7 +1227,29 @@ fn wire_playlist_navigation(
     }
 }
 
+/// Ctrl+C (SIGINT) / `kill` (SIGTERM) from a terminal otherwise has no
+/// effect on this app — nothing in the windowing/GUI stack reacts to them
+/// on its own, so without this the process needs a force-kill (`SIGKILL`)
+/// to go away at all, and never runs the normal Slint shutdown path.
+/// `quit_event_loop` is documented as callable from any thread, so a
+/// dedicated thread blocking on the signal is enough; no unsafe
+/// signal-handler code needed.
+fn install_signal_quit_handler() {
+    let mut signals = signal_hook::iterator::Signals::new([
+        signal_hook::consts::SIGINT,
+        signal_hook::consts::SIGTERM,
+    ])
+    .expect("failed to register signal handlers");
+    std::thread::spawn(move || {
+        for _ in signals.forever() {
+            let _ = slint::quit_event_loop();
+        }
+    });
+}
+
 fn main() {
+    install_signal_quit_handler();
+
     let app = AppWindow::new().expect("failed to create AppWindow");
 
     let mpv = Rc::new(
