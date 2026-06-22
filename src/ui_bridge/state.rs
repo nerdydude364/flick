@@ -1,7 +1,7 @@
 use super::gif::GifAnimation;
 use crate::playlist::Queue;
 use crate::thumbnails;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
@@ -74,6 +74,14 @@ pub struct AppState {
     /// hash -> status. `Done` is permanent once observed, matching the
     /// original's `spriteStatusCache` ("only permanent done state is cached").
     pub(crate) sprite_status: HashMap<String, SpriteStatus>,
+    /// Sprite-gen jobs waiting for a free slot, FIFO — see
+    /// `sprite_preview::MAX_PARALLEL_SPRITE_JOBS`. Entries are already
+    /// marked `SpriteStatus::InProgress`, so a video re-triggering
+    /// generation while it's still queued is a no-op rather than a
+    /// duplicate enqueue.
+    pub(crate) sprite_queue: VecDeque<(String, PathBuf)>,
+    /// Count of sprite-gen worker threads currently running.
+    pub(crate) sprite_active: usize,
     /// Sidebar list being filled incrementally after a large import.
     pub pending_playlist_rebuild: Option<super::loading::PlaylistRebuildJob>,
     pub library_loading: bool,
@@ -115,6 +123,8 @@ impl AppState {
             gif_animation: None,
             sprite_hash: HashMap::new(),
             sprite_status: HashMap::new(),
+            sprite_queue: VecDeque::new(),
+            sprite_active: 0,
             pending_playlist_rebuild: None,
             library_loading: false,
             library_loading_message: String::new(),
@@ -143,7 +153,13 @@ impl AppState {
         if let Some(h) = self.sprite_hash.get(path) {
             return Some(h.clone());
         }
-        let hash = crate::thumbnails::hash::hash_video_file_cached(path).ok()?;
+        let hash = match crate::thumbnails::hash::hash_video_file_cached(path) {
+            Ok(hash) => hash,
+            Err(err) => {
+                crate::flick_debug!("[sprite] hash failed {}: {err}", path.display());
+                return None;
+            }
+        };
         self.sprite_hash.insert(path.to_path_buf(), hash.clone());
         Some(hash)
     }

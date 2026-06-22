@@ -4,7 +4,39 @@ use crate::thumbnails;
 use crate::{AppWindow, PlaylistItemData};
 use slint::VecModel;
 use std::cell::RefCell;
+use std::path::PathBuf;
 use std::rc::Rc;
+
+/// Caps how many *different* videos can be generating sprites at once.
+/// Each `generate_sprite` call already saturates several cores on its own
+/// (up to `thumbnails::sprite`'s internal `CONCURRENCY` headless mpv
+/// instances extracting frames in parallel), so this bounds cross-video
+/// fan-out rather than per-video work — without it, skimming through
+/// several videos a beat apart (each past the 500ms debounce below) could
+/// pile up many concurrent generations and overload the machine.
+const MAX_PARALLEL_SPRITE_JOBS: usize = 2;
+
+/// Runs `generate_sprite` on a worker thread and reports the result back
+/// over `tx`. Once spawned, this always runs to completion — there's no
+/// cancellation, by design: navigating away from the video mid-generation
+/// must not waste the work already done or leave it to restart later.
+fn spawn_sprite_worker(tx: std::sync::mpsc::Sender<(String, bool)>, hash: String, path: PathBuf) {
+    std::thread::spawn(move || {
+        let ok = match thumbnails::generate_sprite(&path) {
+            Ok(()) => true,
+            Err(err) => {
+                crate::flick_debug!("[sprite] generate failed {}: {err}", path.display());
+                false
+            }
+        };
+        if tx.send((hash, ok)).is_err() {
+            crate::flick_debug!(
+                "[sprite] result channel closed for {} (ok={ok})",
+                path.display()
+            );
+        }
+    });
+}
 
 fn current_video_path(state: &AppState) -> Option<std::path::PathBuf> {
     match state.mode {
@@ -47,6 +79,14 @@ pub fn sync_sprite_preview(app: &AppWindow, state: &mut AppState) {
                 return;
             };
             let Some((image, meta)) = thumbnails::load_cached_sprite(&hash) else {
+                if let Some(path) = current_video_path(state) {
+                    crate::flick_debug!(
+                        "[sprite] preview load failed {} hash {hash}",
+                        path.display()
+                    );
+                } else {
+                    crate::flick_debug!("[sprite] preview load failed hash {hash}");
+                }
                 clear_sprite_preview(app);
                 return;
             };
@@ -160,6 +200,10 @@ pub fn show_list_sprite_preview(app: &AppWindow, state: &mut AppState, queue_ind
         return;
     };
     let Some((image, meta)) = load_sprite_for_list_preview(app, state, queue_index, &hash) else {
+        crate::flick_debug!(
+            "[sprite] list preview load failed {} hash {hash}",
+            path.display()
+        );
         hide_list_sprite_preview(app);
         return;
     };
@@ -243,14 +287,17 @@ pub fn schedule_sprite_generation(
             app.set_sprite_ready(false);
             app.set_sprite_loading(true);
             patch_sprite_status_for_hash(&mut state_ref, &model, &hash, SpriteStatus::InProgress);
-            drop(state_ref);
 
-            let tx = sprite_tx.clone();
-            let path = path.clone();
-            std::thread::spawn(move || {
-                let ok = thumbnails::generate_sprite(&path).is_ok();
-                let _ = tx.send((hash, ok));
-            });
+            // Marked InProgress either way, so a video re-triggering
+            // generation while this is still queued is a no-op above
+            // rather than a duplicate enqueue.
+            if state_ref.sprite_active < MAX_PARALLEL_SPRITE_JOBS {
+                state_ref.sprite_active += 1;
+                drop(state_ref);
+                spawn_sprite_worker(sprite_tx.clone(), hash, path.clone());
+            } else {
+                state_ref.sprite_queue.push_back((hash, path.clone()));
+            }
         },
     );
 }
@@ -264,6 +311,7 @@ pub fn apply_sprite_result(
     app: &AppWindow,
     state: &mut AppState,
     model: &VecModel<PlaylistItemData>,
+    sprite_tx: &std::sync::mpsc::Sender<(String, bool)>,
     hash: String,
     ok: bool,
 ) {
@@ -284,4 +332,43 @@ pub fn apply_sprite_result(
         app.set_sprite_loading(false);
     }
     patch_sprite_status_for_hash(state, model, &hash, status);
+
+    // A slot just freed up — start whatever's been waiting longest. Loops
+    // rather than starting just one, in case `MAX_PARALLEL_SPRITE_JOBS`
+    // ever grows beyond 1 more than what was already running.
+    state.sprite_active = state.sprite_active.saturating_sub(1);
+    while state.sprite_active < MAX_PARALLEL_SPRITE_JOBS {
+        let Some((next_hash, next_path)) = state.sprite_queue.pop_front() else {
+            break;
+        };
+        state.sprite_active += 1;
+        spawn_sprite_worker(sprite_tx.clone(), next_hash, next_path);
+    }
+}
+
+/// Convenience wrapper for call sites that just resumed/advanced playback
+/// (mode switch, remove-item, slideshow, shuffle) and want sprite
+/// generation to begin the same as any other video-play event, without
+/// each one having to dig the right index out of the right queue: resolves
+/// whatever the active queue currently has as `now_playing` and forwards
+/// to `schedule_sprite_generation`, which already no-ops for image mode or
+/// a non-video path. Does nothing if nothing is playing.
+pub fn schedule_sprite_generation_for_now_playing(
+    app_weak: slint::Weak<AppWindow>,
+    state: &Rc<RefCell<AppState>>,
+    model: &Rc<VecModel<PlaylistItemData>>,
+    sprite_timer: &Rc<slint::Timer>,
+    sprite_tx: std::sync::mpsc::Sender<(String, bool)>,
+) {
+    let index = {
+        let state_ref = state.borrow();
+        match state_ref.mode {
+            Mode::Video => state_ref.queue.now_playing(),
+            Mode::All => state_ref.all_queue.now_playing(),
+            Mode::Image => None,
+        }
+    };
+    if let Some(index) = index {
+        schedule_sprite_generation(app_weak, state, model, sprite_timer, sprite_tx, index);
+    }
 }

@@ -24,7 +24,7 @@ pub use playback::{
 };
 pub use sprite_preview::{
     apply_sprite_result, hide_list_sprite_preview, schedule_sprite_generation,
-    show_list_sprite_preview,
+    schedule_sprite_generation_for_now_playing, show_list_sprite_preview,
 };
 pub use state::{AppState, Mode};
 

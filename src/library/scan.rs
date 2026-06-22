@@ -42,10 +42,16 @@ pub fn scan_folder(root: &Path, mut on_batch: impl FnMut(Vec<ScannedFile>)) {
         }
 
         let size = entry.metadata().ok().map(|m| m.len());
-        let content_hash = crate::thumbnails::hash::hash_video_file(&path).ok();
-        if let Some(ref hash) = content_hash {
-            crate::thumbnails::hash::prime_content_hash(path.clone(), hash.clone());
-        }
+        let content_hash = match crate::thumbnails::hash::hash_video_file(&path) {
+            Ok(hash) => {
+                crate::thumbnails::hash::prime_content_hash(path.clone(), hash.clone());
+                Some(hash)
+            }
+            Err(err) => {
+                crate::flick_debug!("[scan] content hash failed {}: {err}", path.display());
+                None
+            }
+        };
         buffer.push(ScannedFile {
             path,
             size,

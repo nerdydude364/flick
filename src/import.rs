@@ -57,7 +57,12 @@ pub fn scan_folders(
         let tx = scan_tx.clone();
         std::thread::spawn(move || {
             library::scan_folder(&folder, |batch| {
-                let _ = tx.send(batch);
+                if tx.send(batch).is_err() {
+                    crate::flick_debug!(
+                        "[import] scan batch channel closed for {}",
+                        folder.display()
+                    );
+                }
             });
         });
     }
@@ -92,9 +97,13 @@ pub fn import_paths(paths: Vec<PathBuf>, ctx: &ImportContext<'_>) {
         std::thread::spawn(move || {
             let named = named_media_entries(files);
             for (_, path, _) in &named {
-                let _ = crate::thumbnails::hash::hash_video_file_cached(path);
+                if let Err(err) = crate::thumbnails::hash::hash_video_file_cached(path) {
+                    crate::flick_debug!("[import] content hash failed {}: {err}", path.display());
+                }
             }
-            let _ = tx.send(named);
+            if tx.send(named).is_err() {
+                crate::flick_debug!("[import] file import channel closed");
+            }
         });
     }
     if !folders.is_empty() {

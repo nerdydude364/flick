@@ -1,5 +1,6 @@
 slint::include_modules!();
 
+mod debug;
 mod dialogs;
 mod import;
 mod library;
@@ -115,6 +116,15 @@ impl MpvUnderlay {
     }
 }
 
+/// Bundles the sprite-gen debounce timer and result channel, which travel
+/// together everywhere a video-play event might need to (re)trigger sprite
+/// generation — keeps functions that already take several other handles
+/// (mpv/state/model/app_weak) under clippy's argument-count limit.
+struct SpriteGenHandles<'a> {
+    timer: &'a Rc<slint::Timer>,
+    tx: &'a std::sync::mpsc::Sender<(String, bool)>,
+}
+
 /// (Re)starts the slideshow's repeating timer at `duration_secs`. Stops
 /// itself (and flips the UI toggle back off) once `navigate_image_relative`
 /// reports it couldn't advance further — port of `startSlideshow`'s
@@ -122,6 +132,7 @@ impl MpvUnderlay {
 fn start_slideshow_timer(
     mpv: &Rc<Mpv>,
     slideshow_timer: &Rc<slint::Timer>,
+    sprite: &SpriteGenHandles<'_>,
     state: &Rc<RefCell<AppState>>,
     model: &Rc<VecModel<PlaylistItemData>>,
     app_weak: &slint::Weak<AppWindow>,
@@ -131,6 +142,8 @@ fn start_slideshow_timer(
     let state = Rc::clone(state);
     let model = Rc::clone(model);
     let app_weak = app_weak.clone();
+    let sprite_timer = Rc::clone(sprite.timer);
+    let sprite_tx = sprite.tx.clone();
     slideshow_timer.start(
         slint::TimerMode::Repeated,
         std::time::Duration::from_secs_f64(duration_secs.max(0.1)),
@@ -138,26 +151,38 @@ fn start_slideshow_timer(
             let Some(app) = app_weak.upgrade() else {
                 return;
             };
-            let mut state_ref = state.borrow_mut();
-            if !state_ref.slideshow_on {
-                return;
-            }
-            let advanced = match state_ref.mode {
-                ui_bridge::Mode::Image => {
-                    ui_bridge::navigate_image_relative(&mpv, &app, &mut state_ref, &model, 1)
+            let advanced = {
+                let mut state_ref = state.borrow_mut();
+                if !state_ref.slideshow_on {
+                    return;
                 }
-                ui_bridge::Mode::All => {
-                    if !ui_bridge::all_slideshow_wants_timer(&state_ref) {
-                        return;
+                match state_ref.mode {
+                    ui_bridge::Mode::Image => {
+                        ui_bridge::navigate_image_relative(&mpv, &app, &mut state_ref, &model, 1)
                     }
-                    ui_bridge::navigate_all_relative(&mpv, &app, &mut state_ref, &model, 1)
+                    ui_bridge::Mode::All => {
+                        if !ui_bridge::all_slideshow_wants_timer(&state_ref) {
+                            return;
+                        }
+                        ui_bridge::navigate_all_relative(&mpv, &app, &mut state_ref, &model, 1)
+                    }
+                    ui_bridge::Mode::Video => false,
                 }
-                ui_bridge::Mode::Video => false,
             };
             if !advanced {
-                state_ref.slideshow_on = false;
+                state.borrow_mut().slideshow_on = false;
                 app.set_slideshow_on(false);
+                return;
             }
+            // The slideshow can auto-advance from an image straight into a
+            // video (All mode) — counts as a video-play event too.
+            ui_bridge::schedule_sprite_generation_for_now_playing(
+                app_weak.clone(),
+                &state,
+                &model,
+                &sprite_timer,
+                sprite_tx.clone(),
+            );
         },
     );
 }
@@ -487,7 +512,12 @@ fn wire_playback_controls(app: &AppWindow, mpv: &Rc<Mpv>, state: &Rc<RefCell<App
 /// Wires sidebar/library-management callbacks shared by both the video and
 /// image queues: reveal-in-file-manager, remove, drag-reorder, opening new
 /// files, switching between video/image mode, and clearing the active queue.
-fn wire_queue_management(app: &AppWindow, ctx: &AppContext) {
+fn wire_queue_management(
+    app: &AppWindow,
+    ctx: &AppContext,
+    sprite_timer: &Rc<slint::Timer>,
+    sprite_tx: &std::sync::mpsc::Sender<(String, bool)>,
+) {
     {
         let state = Rc::clone(&ctx.state);
         app.on_reveal_item(move |queue_index| {
@@ -504,6 +534,8 @@ fn wire_queue_management(app: &AppWindow, ctx: &AppContext) {
         let state = Rc::clone(&ctx.state);
         let model = Rc::clone(&ctx.model);
         let app_weak = app.as_weak();
+        let sprite_timer = Rc::clone(sprite_timer);
+        let sprite_tx = sprite_tx.clone();
         app.on_remove_item(move |queue_index| {
             let Some(app) = app_weak.upgrade() else {
                 return;
@@ -514,6 +546,15 @@ fn wire_queue_management(app: &AppWindow, ctx: &AppContext) {
                 &mut state.borrow_mut(),
                 &model,
                 queue_index as usize,
+            );
+            // Removing the currently-playing item can promote a different
+            // video to "now playing" — counts as a video-play event too.
+            ui_bridge::schedule_sprite_generation_for_now_playing(
+                app_weak.clone(),
+                &state,
+                &model,
+                &sprite_timer,
+                sprite_tx.clone(),
             );
         });
     }
@@ -578,6 +619,8 @@ fn wire_queue_management(app: &AppWindow, ctx: &AppContext) {
         let gallery_video_flags = Rc::clone(&ctx.gallery_video_flags);
         let gallery_failed_flags = Rc::clone(&ctx.gallery_failed_flags);
         let gallery_tx = ctx.gallery_tx.clone();
+        let sprite_timer = Rc::clone(sprite_timer);
+        let sprite_tx = sprite_tx.clone();
         app.on_set_view_mode(move |mode| {
             let Some(app) = app_weak.upgrade() else {
                 return;
@@ -600,6 +643,15 @@ fn wire_queue_management(app: &AppWindow, ctx: &AppContext) {
                 &model,
                 target,
                 Some(&gallery),
+            );
+            // Switching back into Video/All mode can resume a video that
+            // was already "now playing" — counts as a video-play event.
+            ui_bridge::schedule_sprite_generation_for_now_playing(
+                app_weak.clone(),
+                &state,
+                &model,
+                &sprite_timer,
+                sprite_tx.clone(),
             );
             schedule_pending_gallery_reload(
                 app_weak.clone(),
@@ -656,20 +708,35 @@ fn wire_image_viewer(
         let state = Rc::clone(&ctx.state);
         let model = Rc::clone(&ctx.model);
         let app_weak = app.as_weak();
+        let sprite_timer = Rc::clone(sprite_timer);
+        let sprite_tx = sprite_tx.clone();
         app.on_navigate_image(move |delta| {
             let Some(app) = app_weak.upgrade() else {
                 return;
             };
-            let mut state = state.borrow_mut();
-            match state.mode {
-                ui_bridge::Mode::Image => {
-                    ui_bridge::navigate_image_relative(&mpv, &app, &mut state, &model, delta);
+            {
+                let mut state = state.borrow_mut();
+                match state.mode {
+                    ui_bridge::Mode::Image => {
+                        ui_bridge::navigate_image_relative(&mpv, &app, &mut state, &model, delta);
+                    }
+                    ui_bridge::Mode::All => {
+                        ui_bridge::navigate_all_relative(&mpv, &app, &mut state, &model, delta);
+                    }
+                    ui_bridge::Mode::Video => {}
                 }
-                ui_bridge::Mode::All => {
-                    ui_bridge::navigate_all_relative(&mpv, &app, &mut state, &model, delta);
-                }
-                ui_bridge::Mode::Video => {}
             }
+            // navigate_all_relative can land on a video — make sure that
+            // counts as a video-play event the same as prev/next do in
+            // Video mode (`schedule_sprite_generation_for_now_playing`
+            // no-ops harmlessly for Image mode / a non-video item).
+            ui_bridge::schedule_sprite_generation_for_now_playing(
+                app_weak.clone(),
+                &state,
+                &model,
+                &sprite_timer,
+                sprite_tx.clone(),
+            );
         });
     }
 
@@ -765,15 +832,37 @@ fn wire_image_viewer(
         let state = Rc::clone(&ctx.state);
         let model = Rc::clone(&ctx.model);
         let slideshow_timer = Rc::clone(&slideshow_timer);
+        let sprite_timer = Rc::clone(sprite_timer);
+        let sprite_tx = sprite_tx.clone();
         let app_weak = app.as_weak();
         app.on_toggle_slideshow(move || {
             let Some(app) = app_weak.upgrade() else {
                 return;
             };
             ui_bridge::toggle_slideshow(&mpv, &app, &mut state.borrow_mut(), &model);
+            // Turning slideshow on can land straight on a video (All mode,
+            // nothing was playing yet) — counts as a video-play event too.
+            ui_bridge::schedule_sprite_generation_for_now_playing(
+                app_weak.clone(),
+                &state,
+                &model,
+                &sprite_timer,
+                sprite_tx.clone(),
+            );
             if app.get_slideshow_on() {
                 let duration = state.borrow().slideshow_duration;
-                start_slideshow_timer(&mpv, &slideshow_timer, &state, &model, &app_weak, duration);
+                start_slideshow_timer(
+                    &mpv,
+                    &slideshow_timer,
+                    &SpriteGenHandles {
+                        timer: &sprite_timer,
+                        tx: &sprite_tx,
+                    },
+                    &state,
+                    &model,
+                    &app_weak,
+                    duration,
+                );
             } else {
                 slideshow_timer.stop();
             }
@@ -785,6 +874,8 @@ fn wire_image_viewer(
         let state = Rc::clone(&ctx.state);
         let model = Rc::clone(&ctx.model);
         let slideshow_timer = Rc::clone(&slideshow_timer);
+        let sprite_timer = Rc::clone(sprite_timer);
+        let sprite_tx = sprite_tx.clone();
         let app_weak = app.as_weak();
         app.on_slideshow_duration_changed(move |seconds| {
             let Some(app) = app_weak.upgrade() else {
@@ -793,7 +884,18 @@ fn wire_image_viewer(
             ui_bridge::set_slideshow_duration(&app, &mut state.borrow_mut(), seconds as f64);
             if app.get_slideshow_on() {
                 let duration = state.borrow().slideshow_duration;
-                start_slideshow_timer(&mpv, &slideshow_timer, &state, &model, &app_weak, duration);
+                start_slideshow_timer(
+                    &mpv,
+                    &slideshow_timer,
+                    &SpriteGenHandles {
+                        timer: &sprite_timer,
+                        tx: &sprite_tx,
+                    },
+                    &state,
+                    &model,
+                    &app_weak,
+                    duration,
+                );
             }
         });
     }
@@ -988,48 +1090,77 @@ fn wire_playlist_navigation(
         let state = Rc::clone(state);
         let model = Rc::clone(model);
         let app_weak = app.as_weak();
+        let sprite_timer = Rc::clone(sprite_timer);
+        let sprite_tx = sprite_tx.clone();
         app.on_toggle_shuffle(move || {
             let Some(app) = app_weak.upgrade() else {
                 return;
             };
-            let mut state = state.borrow_mut();
-            state.shuffle_on = !state.shuffle_on;
-            app.set_shuffle_on(state.shuffle_on);
-            let query = state.search_query.clone();
-            // Both queues reshuffle independently — shuffle is a single
-            // global toggle, but each queue keeps its own play order, port
-            // of `toggleShuffle()` driving `reshuffle()` and
-            // `reshuffleImages()` together.
-            if state.shuffle_on {
-                if state.queue.len() >= 2
-                    && state.mode == ui_bridge::Mode::Video
-                    && let Some(idx) = state.queue.reshuffle_jump_to_first(&query)
-                {
-                    ui_bridge::play_index(&mpv, &app, &mut state, &model, idx);
-                }
-                if state.image_queue.len() >= 2 {
-                    state.image_queue.reshuffle_keep_current_first(&query);
+            {
+                let mut state = state.borrow_mut();
+                state.shuffle_on = !state.shuffle_on;
+                app.set_shuffle_on(state.shuffle_on);
+                let query = state.search_query.clone();
+                // All three queues reshuffle every time shuffle is toggled on —
+                // shuffle is a single global toggle, but each queue keeps its
+                // own play order, so a queue that's reshuffled only while it's
+                // the active mode would still hold its old (unshuffled) order
+                // once the user switches to it later, despite the button
+                // showing "on" the whole time. Only the currently active queue
+                // also jumps playback to a freshly chosen item — the inactive
+                // ones just get a fresh order lined up for whenever the user
+                // switches to them, without disturbing what's "now playing"
+                // there. Port of `toggleShuffle()` driving `reshuffle()` and
+                // `reshuffleImages()` together.
+                if state.shuffle_on {
+                    if state.queue.len() >= 2 {
+                        if state.mode == ui_bridge::Mode::Video {
+                            if let Some(idx) = state.queue.reshuffle_jump_to_first(&query) {
+                                ui_bridge::play_index(&mpv, &app, &mut state, &model, idx);
+                            }
+                        } else {
+                            state.queue.reshuffle_keep_current_first(&query);
+                        }
+                    }
+                    if state.image_queue.len() >= 2 {
+                        state.image_queue.reshuffle_keep_current_first(&query);
+                        if state.mode == ui_bridge::Mode::Image {
+                            ui_bridge::sync_image_viewer_ui(&app, &mut state);
+                        }
+                    }
+                    if state.all_queue.len() >= 2 {
+                        if state.mode == ui_bridge::Mode::All {
+                            if let Some(idx) = state.all_queue.reshuffle_jump_to_first(&query) {
+                                ui_bridge::present_item(&mpv, &app, &mut state, &model, idx);
+                            }
+                        } else {
+                            state.all_queue.reshuffle_keep_current_first(&query);
+                        }
+                    }
+                } else {
+                    state.queue.reset_play_order();
+                    state.image_queue.reset_play_order();
+                    state.all_queue.reset_play_order();
                     if state.mode == ui_bridge::Mode::Image {
                         ui_bridge::sync_image_viewer_ui(&app, &mut state);
+                    } else if state.mode == ui_bridge::Mode::All {
+                        ui_bridge::sync_all_view_ui(&app, &mut state);
                     }
                 }
-                if state.all_queue.len() >= 2
-                    && state.mode == ui_bridge::Mode::All
-                    && let Some(idx) = state.all_queue.reshuffle_jump_to_first(&query)
-                {
-                    ui_bridge::present_item(&mpv, &app, &mut state, &model, idx);
-                }
-            } else {
-                state.queue.reset_play_order();
-                state.image_queue.reset_play_order();
-                state.all_queue.reset_play_order();
-                if state.mode == ui_bridge::Mode::Image {
-                    ui_bridge::sync_image_viewer_ui(&app, &mut state);
-                } else if state.mode == ui_bridge::Mode::All {
-                    ui_bridge::sync_all_view_ui(&app, &mut state);
-                }
+                ui_bridge::rebuild_playlist_model(&mut state, &model);
             }
-            ui_bridge::rebuild_playlist_model(&mut state, &model);
+            // Toggling shuffle can jump the active queue to a freshly
+            // chosen video (see `reshuffle_jump_to_first` above) — make
+            // sure that lands sprite generation the same as any other
+            // video-play event instead of waiting for a different nav
+            // action to trigger it.
+            ui_bridge::schedule_sprite_generation_for_now_playing(
+                app_weak.clone(),
+                &state,
+                &model,
+                &sprite_timer,
+                sprite_tx.clone(),
+            );
         });
     }
 
@@ -1194,7 +1325,7 @@ fn main() {
         gallery_failed_flags: Rc::clone(&gallery_failed_flags),
         gallery_tx: gallery_tx.clone(),
     };
-    wire_queue_management(&app, &app_ctx);
+    wire_queue_management(&app, &app_ctx, &sprite_timer, &sprite_tx);
     // Centralize the slideshow timer so mode switches can stop it reliably.
     let slideshow_timer = Rc::new(slint::Timer::default());
     state.borrow_mut().slideshow_timer = Some(Rc::clone(&slideshow_timer));
@@ -1216,6 +1347,7 @@ fn main() {
         let model = Rc::clone(&model);
         let gallery_model = Rc::clone(&gallery_model);
         let app_weak = app.as_weak();
+        let slideshow_timer = Rc::clone(&slideshow_timer);
         let sprite_timer = Rc::clone(&sprite_timer);
         let sprite_tx = sprite_tx.clone();
         let scan_tx = scan_tx.clone();
@@ -1245,7 +1377,9 @@ fn main() {
                         result,
                     );
                 }
+                let mut imported_file_batch = false;
                 while let Ok(batch) = file_import_rx.try_recv() {
+                    imported_file_batch = true;
                     import::apply_file_import_batch(
                         batch,
                         &import::ImportContext {
@@ -1262,6 +1396,20 @@ fn main() {
                                 tx: &gallery_tx,
                             },
                         },
+                    );
+                }
+                if imported_file_batch {
+                    // Covers the cold-start single-file autoplay (CLI args,
+                    // "Open with Flick", drag-drop, or the file picker all
+                    // converge here) — a freshly imported single video
+                    // should get its sprite sheet generated the same as any
+                    // other video-play event, not just on the next click.
+                    ui_bridge::schedule_sprite_generation_for_now_playing(
+                        app_weak.clone(),
+                        &state,
+                        &model,
+                        &sprite_timer,
+                        sprite_tx.clone(),
                     );
                 }
                 let mut dropped = Vec::new();
@@ -1329,6 +1477,16 @@ fn main() {
                             tx: &gallery_tx,
                         },
                     );
+                    // A scanned folder containing exactly one video also
+                    // autoplays via the same cold-start path — same
+                    // reasoning as the file-import batch above.
+                    ui_bridge::schedule_sprite_generation_for_now_playing(
+                        app_weak.clone(),
+                        &state,
+                        &model,
+                        &sprite_timer,
+                        sprite_tx.clone(),
+                    );
                 }
                 ui_bridge::tick_playlist_rebuild(&app, &mut state.borrow_mut(), &model);
                 {
@@ -1356,7 +1514,14 @@ fn main() {
                     );
                 }
                 while let Ok((hash, ok)) = sprite_rx.try_recv() {
-                    ui_bridge::apply_sprite_result(&app, &mut state.borrow_mut(), &model, hash, ok);
+                    ui_bridge::apply_sprite_result(
+                        &app,
+                        &mut state.borrow_mut(),
+                        &model,
+                        &sprite_tx,
+                        hash,
+                        ok,
+                    );
                 }
                 // Non-blocking poll (timeout 0.0): drain whatever's queued on the
                 // playback-property/error event client since the last tick.
@@ -1397,7 +1562,11 @@ fn main() {
                                     let duration = state.borrow().slideshow_duration;
                                     start_slideshow_timer(
                                         &mpv,
-                                        &sprite_timer,
+                                        &slideshow_timer,
+                                        &SpriteGenHandles {
+                                            timer: &sprite_timer,
+                                            tx: &sprite_tx,
+                                        },
                                         &state,
                                         &model,
                                         &app_weak,
