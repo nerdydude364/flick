@@ -3,6 +3,8 @@ use std::path::Path;
 use std::sync::Mutex;
 use std::time::Duration;
 
+use super::cache;
+
 // Headless extraction/probe cores are created concurrently from multiple
 // background threads (see sprite.rs's bounded-concurrency batches). Mpv core
 // creation itself isn't documented as safe to run fully concurrently from
@@ -11,12 +13,27 @@ use std::time::Duration;
 // independently and in parallel.
 static MPV_CREATE_LOCK: Mutex<()> = Mutex::new(());
 
+// A real frame grab or duration probe essentially never needs anywhere near
+// 30s even under heavy concurrent load — that ceiling mostly just delayed
+// detecting a corrupt/truncated file's demuxer hang. Probing is gated even
+// tighter than extraction since it's the up-front validity check generation
+// shouldn't proceed past at all (see `probe_duration_gated`).
+const EXTRACT_TIMEOUT: Duration = Duration::from_secs(10);
+const PROBE_TIMEOUT: Duration = Duration::from_secs(8);
+
 #[derive(Debug)]
 pub enum ExtractError {
     Mpv(String),
     Timeout,
     Io(std::io::Error),
-    UnexpectedSize { expected: usize, got: usize },
+    UnexpectedSize {
+        expected: usize,
+        got: usize,
+    },
+    /// Source already proven unreadable by an earlier probe — see
+    /// `probe_duration_gated`. Distinct from `Timeout` so callers can tell
+    /// "just failed now" from "we already knew and skipped the attempt".
+    KnownInvalid,
 }
 
 impl std::fmt::Display for ExtractError {
@@ -30,6 +47,9 @@ impl std::fmt::Display for ExtractError {
                     f,
                     "raw frame size mismatch: expected {expected} bytes, got {got}"
                 )
+            }
+            Self::KnownInvalid => {
+                write!(f, "skipped: previously detected as invalid/corrupt media")
             }
         }
     }
@@ -102,7 +122,7 @@ pub fn extract_frame(
     // flush and got 0 bytes. And unlike the `mpv` CLI frontend, driving
     // encode mode through libmpv directly doesn't auto-quit once the input
     // is done; we have to explicitly request it, then wait for Shutdown.
-    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    let deadline = std::time::Instant::now() + EXTRACT_TIMEOUT;
     let mut quit_sent = false;
     loop {
         if std::time::Instant::now() >= deadline {
@@ -159,7 +179,7 @@ pub fn probe_duration(input: &Path) -> Result<f64, ExtractError> {
     mpv.command("loadfile", &[&input.to_string_lossy(), "replace"])
         .map_err(|e| ExtractError::Mpv(e.to_string()))?;
 
-    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    let deadline = std::time::Instant::now() + PROBE_TIMEOUT;
     loop {
         if std::time::Instant::now() >= deadline {
             return Err(ExtractError::Timeout);
@@ -174,6 +194,20 @@ pub fn probe_duration(input: &Path) -> Result<f64, ExtractError> {
 
     mpv.get_property::<f64>("duration")
         .map_err(|e| ExtractError::Mpv(e.to_string()))
+}
+
+/// Validity gate shared by poster and sprite generation: skips straight to
+/// `KnownInvalid` for a hash already proven unreadable (no repeat probe),
+/// otherwise probes fresh and permanently marks the hash invalid on
+/// failure. A probe failure is a strong, file-level signal — mpv couldn't
+/// even parse this file's metadata — unlike a single failed frame
+/// extraction deeper in the timeline, which only means that one timestamp
+/// was bad; only this gate marks a hash invalid.
+pub fn probe_duration_gated(input: &Path, hash: &str) -> Result<f64, ExtractError> {
+    if cache::is_known_invalid(hash) {
+        return Err(ExtractError::KnownInvalid);
+    }
+    probe_duration(input).inspect_err(|_| cache::mark_invalid(hash))
 }
 
 #[cfg(test)]

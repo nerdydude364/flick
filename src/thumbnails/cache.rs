@@ -61,3 +61,28 @@ pub fn write_atomic(path: &Path, contents: &[u8]) -> std::io::Result<()> {
     std::fs::write(&tmp, contents)?;
     std::fs::rename(&tmp, path)
 }
+
+/// Marker files for content hashes whose source mpv couldn't even probe
+/// (corrupt/truncated/invalid media) — separate from the poster/sprite
+/// caches above since there's no thumbnail payload to store, just the fact
+/// that generation was already proven hopeless. Persisted to disk (not just
+/// in-memory) so a known-broken file costs one probe total, not one per
+/// retry pass, per replay, or per app restart.
+fn invalid_dir() -> PathBuf {
+    let base = dirs::cache_dir().unwrap_or_else(std::env::temp_dir);
+    let dir = base.join("Flick").join("invalid");
+    let _ = std::fs::create_dir_all(&dir);
+    dir
+}
+
+fn invalid_marker_file(hash: &str) -> PathBuf {
+    invalid_dir().join(format!("{hash}.broken"))
+}
+
+pub fn is_known_invalid(hash: &str) -> bool {
+    invalid_marker_file(hash).exists()
+}
+
+pub fn mark_invalid(hash: &str) {
+    let _ = write_atomic(&invalid_marker_file(hash), b"");
+}

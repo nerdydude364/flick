@@ -1,5 +1,5 @@
 use super::cache;
-use super::frame::{ExtractError, extract_frame, probe_duration};
+use super::frame::{ExtractError, extract_frame, probe_duration_gated};
 use super::hash::hash_video_file_cached;
 use image::{ImageBuffer, Rgba, RgbaImage};
 use serde::{Deserialize, Serialize};
@@ -98,7 +98,11 @@ pub fn generate_sprite(video_path: &Path) -> Result<(), SpriteError> {
         return Ok(());
     }
 
-    let duration = probe_duration(video_path).map_err(SpriteError::Extract)?;
+    // Cheap validity gate before committing to the full per-frame
+    // extraction pass below — catches corrupt/truncated files fast, and
+    // (since the result is persisted by content hash) only ever pays that
+    // cost once per file, including across app restarts.
+    let duration = probe_duration_gated(video_path, &hash).map_err(SpriteError::Extract)?;
 
     // Dynamic interval: ceil(duration/MAX_FRAMES) gives 1s for short videos,
     // scales up automatically for longer ones so frame count stays bounded.
