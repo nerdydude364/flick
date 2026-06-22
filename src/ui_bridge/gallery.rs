@@ -6,8 +6,8 @@ use libmpv2::Mpv;
 use slint::{Model, VecModel};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::Sender;
-use std::sync::{Condvar, Mutex};
 
 /// Keep headless mpv poster extraction bounded — high concurrency is a common
 /// source of flaky frame grabs on Linux when many files load at once.
@@ -222,39 +222,47 @@ fn thumb_work_order(len: usize, focus: usize) -> Vec<usize> {
     order
 }
 
-struct ConcurrencyGate {
-    slots: Mutex<usize>,
-    available: Condvar,
+/// One gallery cell's worth of work for the bounded thumbnail pool below —
+/// `grid_pos` is where the result lands, decoupled from the work's processing
+/// order so retries (which run over a sparse subset of the grid) can share
+/// the same pool helper as a full/append pass.
+struct ThumbWorkItem {
+    grid_pos: usize,
+    path: PathBuf,
+    is_video: bool,
 }
 
-impl ConcurrencyGate {
-    fn new(limit: usize) -> Self {
-        Self {
-            slots: Mutex::new(limit),
-            available: Condvar::new(),
-        }
+/// Processes `items` with a small fixed pool of worker threads that pull
+/// from a shared cursor, rather than spawning one OS thread per item. A
+/// 20-50k item queue previously spawned that many threads up front (gated
+/// down to `CONCURRENCY` concurrent via a condvar, but all still live at
+/// once) — enough to exhaust the OS thread/stack budget and crash, which is
+/// what was happening on Linux during large imports.
+fn run_thumbnail_pool(generation: u64, items: Vec<ThumbWorkItem>, tx: Sender<GalleryThumbResult>) {
+    if items.is_empty() {
+        return;
     }
-
-    fn acquire(&self) {
-        let mut slots = self.slots.lock().unwrap();
-        while *slots == 0 {
-            slots = self.available.wait(slots).unwrap();
-        }
-        *slots -= 1;
+    let items = Arc::new(items);
+    let cursor = Arc::new(AtomicUsize::new(0));
+    let workers = CONCURRENCY.min(items.len());
+    let mut handles = Vec::with_capacity(workers);
+    for _ in 0..workers {
+        let items = Arc::clone(&items);
+        let cursor = Arc::clone(&cursor);
+        let tx = tx.clone();
+        handles.push(std::thread::spawn(move || {
+            loop {
+                let i = cursor.fetch_add(1, Ordering::Relaxed);
+                let Some(item) = items.get(i) else { break };
+                let hash = generate_poster_hash(&item.path, item.is_video);
+                if tx.send((generation, item.grid_pos, hash)).is_err() {
+                    break;
+                }
+            }
+        }));
     }
-
-    fn release(&self) {
-        let mut slots = self.slots.lock().unwrap();
-        *slots += 1;
-        self.available.notify_one();
-    }
-}
-
-struct GateGuard<'a>(&'a ConcurrencyGate);
-
-impl Drop for GateGuard<'_> {
-    fn drop(&mut self) {
-        self.0.release();
+    for handle in handles {
+        let _ = handle.join();
     }
 }
 
@@ -284,23 +292,15 @@ fn spawn_gallery_thumb_workers(
     work_order: Vec<usize>,
     tx: Sender<GalleryThumbResult>,
 ) {
-    std::thread::spawn(move || {
-        let gate = Arc::new(ConcurrencyGate::new(CONCURRENCY));
-        std::thread::scope(|scope| {
-            for pos in work_order {
-                let path = paths[pos].clone();
-                let is_vid = is_video[pos];
-                let tx = tx.clone();
-                let gate = Arc::clone(&gate);
-                scope.spawn(move || {
-                    gate.acquire();
-                    let _release = GateGuard(&gate);
-                    let hash = generate_poster_hash(&path, is_vid);
-                    let _ = tx.send((generation, pos, hash));
-                });
-            }
-        });
-    });
+    let items: Vec<ThumbWorkItem> = work_order
+        .into_iter()
+        .map(|pos| ThumbWorkItem {
+            grid_pos: pos,
+            path: paths[pos].clone(),
+            is_video: is_video[pos],
+        })
+        .collect();
+    std::thread::spawn(move || run_thumbnail_pool(generation, items, tx));
 }
 
 fn load_gallery_thumbnails(state: &mut AppState, gallery: &GalleryContext<'_>) {
@@ -411,29 +411,17 @@ fn retry_failed_gallery_thumbnails(
         gallery.failed_flags.set_row_data(*pos, false);
     }
 
-    let work_paths: Vec<PathBuf> = failed_positions.iter().map(|&i| paths[i].clone()).collect();
-    let work_is_video: Vec<bool> = failed_positions.iter().map(|&i| is_video[i]).collect();
-    let work_order: Vec<usize> = (0..failed_positions.len()).collect();
+    let items: Vec<ThumbWorkItem> = failed_positions
+        .into_iter()
+        .map(|grid_pos| ThumbWorkItem {
+            grid_pos,
+            path: paths[grid_pos].clone(),
+            is_video: is_video[grid_pos],
+        })
+        .collect();
 
     let tx = gallery.tx.clone();
-    std::thread::spawn(move || {
-        let gate = Arc::new(ConcurrencyGate::new(CONCURRENCY));
-        std::thread::scope(|scope| {
-            for local_pos in work_order {
-                let path = work_paths[local_pos].clone();
-                let is_vid = work_is_video[local_pos];
-                let grid_pos = failed_positions[local_pos];
-                let tx = tx.clone();
-                let gate = Arc::clone(&gate);
-                scope.spawn(move || {
-                    gate.acquire();
-                    let _release = GateGuard(&gate);
-                    let hash = generate_poster_hash(&path, is_vid);
-                    let _ = tx.send((generation, grid_pos, hash));
-                });
-            }
-        });
-    });
+    std::thread::spawn(move || run_thumbnail_pool(generation, items, tx));
 }
 
 fn failed_gallery_positions(failed_flags: &VecModel<bool>) -> Vec<usize> {

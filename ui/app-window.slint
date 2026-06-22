@@ -294,6 +294,8 @@ export component AppWindow inherits Window {
             y: 0;
             width: 8px;
             height: 100%;
+            opacity: chrome-visible ? 1.0 : 0.0;
+            animate opacity { duration: 200ms; }
 
             Rectangle {
                 x: (parent.width - self.width) / 2;

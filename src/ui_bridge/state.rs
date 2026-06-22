@@ -85,6 +85,11 @@ pub struct AppState {
     pub gallery_thumb_retry_pass: u8,
     /// Heavy thumbnail rebuild deferred until after the grid shell paints.
     pub pending_gallery_reload: bool,
+    /// A tail-append was skipped because the grid was still generating
+    /// thumbnails for an earlier batch — retried once that settles, instead
+    /// of wiping and restarting the whole grid for every batch a large
+    /// folder scan delivers (see `try_start_pending_gallery_append`).
+    pub pending_gallery_append: bool,
     /// Bumped on clear so in-flight folder-scan batches are ignored.
     pub library_session: u64,
 }
@@ -118,6 +123,7 @@ impl AppState {
             gallery_thumbs_failed: 0,
             gallery_thumb_retry_pass: 0,
             pending_gallery_reload: false,
+            pending_gallery_append: false,
             library_session: 0,
         }
     }
