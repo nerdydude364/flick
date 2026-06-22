@@ -1,4 +1,4 @@
-use super::loading::{gallery_busy, patch_playlist_thumbnail_for_hash};
+use super::loading::gallery_busy;
 use super::state::{AppState, Mode};
 use crate::AppWindow;
 use crate::library::{MediaKind, media_kind};
@@ -484,23 +484,27 @@ fn finish_gallery_batch(
     sync_loading_ui(app, state);
 }
 
+/// Returns the poster hash on a successful load, so the caller can batch
+/// sidebar updates across a whole drain round — see
+/// `loading::patch_playlist_thumbnails_for_hashes`.
 pub fn apply_gallery_thumb(
     state: &mut AppState,
     app: &AppWindow,
     gallery: &GalleryContext<'_>,
     playlist_model: &VecModel<crate::PlaylistItemData>,
     result: GalleryThumbResult,
-) {
+) -> Option<String> {
     let (generation, pos, hash) = result;
     if generation != state.gallery_generation || pos >= gallery.thumbnails.row_count() {
-        return;
+        return None;
     }
+    let mut loaded_hash = None;
     let success = if let Some(ref hash) = hash {
         if let Some(image) =
             crate::thumbnails::load_cached_poster_with_retry(hash, UI_LOAD_ATTEMPTS)
         {
             gallery.thumbnails.set_row_data(pos, image);
-            patch_playlist_thumbnail_for_hash(state, playlist_model, hash);
+            loaded_hash = Some(hash.clone());
             true
         } else {
             if let Some((_, paths, is_video)) = gallery_source(state)
@@ -535,4 +539,5 @@ pub fn apply_gallery_thumb(
     } else if done.is_multiple_of(4) {
         sync_loading_ui(app, state);
     }
+    loaded_hash
 }

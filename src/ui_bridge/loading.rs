@@ -279,19 +279,28 @@ pub(crate) fn patch_sprite_status_for_hash(
     }
 }
 
-/// Updates sidebar row thumbnail(s) once a poster lands in the disk cache —
-/// e.g. after the gallery grid finishes generating a thumb the list can reuse.
-pub(crate) fn patch_playlist_thumbnail_for_hash(
+/// Updates sidebar row thumbnail(s) once a batch of posters land in the disk
+/// cache — e.g. after the gallery grid finishes generating thumbs the list
+/// can reuse. Batched (one sidebar scan covering every hash in `hashes`)
+/// rather than one scan per hash: a gallery reload fires this once per
+/// thumbnail, and a per-hash full-list rescan is O(rows) each, so without
+/// batching a library with tens of thousands of rows turns one reload into
+/// an O(rows²) pass — easily hundreds of millions of iterations, which is
+/// what was freezing/crashing large libraries on mode switch once the
+/// sidebar was already built out to full size.
+pub fn patch_playlist_thumbnails_for_hashes(
     state: &mut AppState,
     model: &VecModel<PlaylistItemData>,
-    hash: &str,
+    hashes: &[String],
 ) {
-    if !crate::thumbnails::cache::poster_is_ready(hash) {
+    let images: HashMap<&str, slint::Image> = hashes
+        .iter()
+        .filter(|hash| crate::thumbnails::cache::poster_is_ready(hash))
+        .filter_map(|hash| poster_image_for_hash(hash).map(|image| (hash.as_str(), image)))
+        .collect();
+    if images.is_empty() {
         return;
     }
-    let Some(image) = poster_image_for_hash(hash) else {
-        return;
-    };
     let (filtered, _, _) = playlist_view(state);
     for (display_index, &queue_index) in filtered.iter().enumerate() {
         let item = match state.mode {
@@ -303,9 +312,12 @@ pub(crate) fn patch_playlist_thumbnail_for_hash(
             continue;
         };
         let path = item.path.clone();
-        if state.sprite_hash_for(&path).as_deref() != Some(hash) {
+        let Some(hash) = state.sprite_hash_for(&path) else {
             continue;
-        }
+        };
+        let Some(image) = images.get(hash.as_str()) else {
+            continue;
+        };
         let Some(mut row) = model.row_data(display_index) else {
             continue;
         };

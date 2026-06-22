@@ -1227,7 +1227,29 @@ fn wire_playlist_navigation(
     }
 }
 
+/// Ctrl+C (SIGINT) / `kill` (SIGTERM) from a terminal otherwise has no
+/// effect on this app — nothing in the windowing/GUI stack reacts to them
+/// on its own, so without this the process needs a force-kill (`SIGKILL`)
+/// to go away at all, and never runs the normal Slint shutdown path.
+/// `quit_event_loop` is documented as callable from any thread, so a
+/// dedicated thread blocking on the signal is enough; no unsafe
+/// signal-handler code needed.
+fn install_signal_quit_handler() {
+    let mut signals = signal_hook::iterator::Signals::new([
+        signal_hook::consts::SIGINT,
+        signal_hook::consts::SIGTERM,
+    ])
+    .expect("failed to register signal handlers");
+    std::thread::spawn(move || {
+        for _ in signals.forever() {
+            let _ = slint::quit_event_loop();
+        }
+    });
+}
+
 fn main() {
+    install_signal_quit_handler();
+
     let app = AppWindow::new().expect("failed to create AppWindow");
 
     let mpv = Rc::new(
@@ -1363,8 +1385,9 @@ fn main() {
                 let Some(app) = app_weak.upgrade() else {
                     return;
                 };
+                let mut updated_thumb_hashes: Vec<String> = Vec::new();
                 while let Ok(result) = gallery_rx.try_recv() {
-                    ui_bridge::apply_gallery_thumb(
+                    if let Some(hash) = ui_bridge::apply_gallery_thumb(
                         &mut state.borrow_mut(),
                         &app,
                         &ui_bridge::GalleryContext {
@@ -1375,6 +1398,15 @@ fn main() {
                         },
                         &model,
                         result,
+                    ) {
+                        updated_thumb_hashes.push(hash);
+                    }
+                }
+                if !updated_thumb_hashes.is_empty() {
+                    ui_bridge::patch_playlist_thumbnails_for_hashes(
+                        &mut state.borrow_mut(),
+                        &model,
+                        &updated_thumb_hashes,
                     );
                 }
                 let mut imported_file_batch = false;

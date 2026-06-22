@@ -18,6 +18,13 @@ pub fn ensure_video_poster_cached(path: &Path) -> Option<String> {
     if cache::is_poster_cached(&hash) {
         return Some(hash);
     }
+    // Cheap validity gate before committing to a full frame extraction —
+    // catches corrupt/truncated files fast, and (since the result is
+    // persisted by content hash) only ever pays that cost once per file.
+    if let Err(err) = frame::probe_duration_gated(path, &hash) {
+        crate::flick_debug!("[video poster] probe failed {}: {err}", path.display());
+        return None;
+    }
     let frame = match frame::extract_frame(path, 1.0, POSTER_SIZE, POSTER_SIZE) {
         Ok(frame) => frame,
         Err(err) => {
