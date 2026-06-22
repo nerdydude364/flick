@@ -1365,7 +1365,9 @@ fn main() {
                         result,
                     );
                 }
+                let mut imported_file_batch = false;
                 while let Ok(batch) = file_import_rx.try_recv() {
+                    imported_file_batch = true;
                     import::apply_file_import_batch(
                         batch,
                         &import::ImportContext {
@@ -1382,6 +1384,20 @@ fn main() {
                                 tx: &gallery_tx,
                             },
                         },
+                    );
+                }
+                if imported_file_batch {
+                    // Covers the cold-start single-file autoplay (CLI args,
+                    // "Open with Flick", drag-drop, or the file picker all
+                    // converge here) — a freshly imported single video
+                    // should get its sprite sheet generated the same as any
+                    // other video-play event, not just on the next click.
+                    ui_bridge::schedule_sprite_generation_for_now_playing(
+                        app_weak.clone(),
+                        &state,
+                        &model,
+                        &sprite_timer,
+                        sprite_tx.clone(),
                     );
                 }
                 let mut dropped = Vec::new();
@@ -1448,6 +1464,16 @@ fn main() {
                             failed_flags: &gallery_failed_flags,
                             tx: &gallery_tx,
                         },
+                    );
+                    // A scanned folder containing exactly one video also
+                    // autoplays via the same cold-start path — same
+                    // reasoning as the file-import batch above.
+                    ui_bridge::schedule_sprite_generation_for_now_playing(
+                        app_weak.clone(),
+                        &state,
+                        &model,
+                        &sprite_timer,
+                        sprite_tx.clone(),
                     );
                 }
                 ui_bridge::tick_playlist_rebuild(&app, &mut state.borrow_mut(), &model);
