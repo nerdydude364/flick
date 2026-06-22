@@ -116,6 +116,15 @@ impl MpvUnderlay {
     }
 }
 
+/// Bundles the sprite-gen debounce timer and result channel, which travel
+/// together everywhere a video-play event might need to (re)trigger sprite
+/// generation — keeps functions that already take several other handles
+/// (mpv/state/model/app_weak) under clippy's argument-count limit.
+struct SpriteGenHandles<'a> {
+    timer: &'a Rc<slint::Timer>,
+    tx: &'a std::sync::mpsc::Sender<(String, bool)>,
+}
+
 /// (Re)starts the slideshow's repeating timer at `duration_secs`. Stops
 /// itself (and flips the UI toggle back off) once `navigate_image_relative`
 /// reports it couldn't advance further — port of `startSlideshow`'s
@@ -123,8 +132,7 @@ impl MpvUnderlay {
 fn start_slideshow_timer(
     mpv: &Rc<Mpv>,
     slideshow_timer: &Rc<slint::Timer>,
-    sprite_timer: &Rc<slint::Timer>,
-    sprite_tx: &std::sync::mpsc::Sender<(String, bool)>,
+    sprite: &SpriteGenHandles<'_>,
     state: &Rc<RefCell<AppState>>,
     model: &Rc<VecModel<PlaylistItemData>>,
     app_weak: &slint::Weak<AppWindow>,
@@ -134,8 +142,8 @@ fn start_slideshow_timer(
     let state = Rc::clone(state);
     let model = Rc::clone(model);
     let app_weak = app_weak.clone();
-    let sprite_timer = Rc::clone(sprite_timer);
-    let sprite_tx = sprite_tx.clone();
+    let sprite_timer = Rc::clone(sprite.timer);
+    let sprite_tx = sprite.tx.clone();
     slideshow_timer.start(
         slint::TimerMode::Repeated,
         std::time::Duration::from_secs_f64(duration_secs.max(0.1)),
@@ -846,8 +854,10 @@ fn wire_image_viewer(
                 start_slideshow_timer(
                     &mpv,
                     &slideshow_timer,
-                    &sprite_timer,
-                    &sprite_tx,
+                    &SpriteGenHandles {
+                        timer: &sprite_timer,
+                        tx: &sprite_tx,
+                    },
                     &state,
                     &model,
                     &app_weak,
@@ -877,8 +887,10 @@ fn wire_image_viewer(
                 start_slideshow_timer(
                     &mpv,
                     &slideshow_timer,
-                    &sprite_timer,
-                    &sprite_tx,
+                    &SpriteGenHandles {
+                        timer: &sprite_timer,
+                        tx: &sprite_tx,
+                    },
                     &state,
                     &model,
                     &app_weak,
@@ -1551,8 +1563,10 @@ fn main() {
                                     start_slideshow_timer(
                                         &mpv,
                                         &slideshow_timer,
-                                        &sprite_timer,
-                                        &sprite_tx,
+                                        &SpriteGenHandles {
+                                            timer: &sprite_timer,
+                                            tx: &sprite_tx,
+                                        },
                                         &state,
                                         &model,
                                         &app_weak,
