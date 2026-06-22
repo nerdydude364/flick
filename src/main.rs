@@ -1385,8 +1385,9 @@ fn main() {
                 let Some(app) = app_weak.upgrade() else {
                     return;
                 };
+                let mut updated_thumb_hashes: Vec<String> = Vec::new();
                 while let Ok(result) = gallery_rx.try_recv() {
-                    ui_bridge::apply_gallery_thumb(
+                    if let Some(hash) = ui_bridge::apply_gallery_thumb(
                         &mut state.borrow_mut(),
                         &app,
                         &ui_bridge::GalleryContext {
@@ -1397,6 +1398,15 @@ fn main() {
                         },
                         &model,
                         result,
+                    ) {
+                        updated_thumb_hashes.push(hash);
+                    }
+                }
+                if !updated_thumb_hashes.is_empty() {
+                    ui_bridge::patch_playlist_thumbnails_for_hashes(
+                        &mut state.borrow_mut(),
+                        &model,
+                        &updated_thumb_hashes,
                     );
                 }
                 let mut imported_file_batch = false;
