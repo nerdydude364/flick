@@ -472,16 +472,24 @@ fn finish_import(
     if total >= 2 {
         state.gallery_open = false;
         app.set_gallery_open(false);
-        if added_count > 0 && super::gallery::try_append_gallery_thumbnails(state, gallery) {
-            // Tail-only thumbnail generation — existing grid cells stay as-is.
-        } else {
-            super::gallery::open_gallery_grid(
-                mpv,
-                app,
-                state,
-                gallery,
-                super::gallery::GalleryReload::IfStale,
-            );
+        if added_count > 0 {
+            if super::loading::gallery_busy(state) {
+                // A previous batch's thumbnails are still generating —
+                // extend the grid once that settles (see
+                // `try_start_pending_gallery_append`) instead of wiping and
+                // restarting it for every batch a large folder scan
+                // delivers, which is what caused the gallery to visibly
+                // reset and reload in waves during big imports.
+                state.pending_gallery_append = true;
+            } else if !super::gallery::try_append_gallery_thumbnails(state, gallery) {
+                super::gallery::open_gallery_grid(
+                    mpv,
+                    app,
+                    state,
+                    gallery,
+                    super::gallery::GalleryReload::IfStale,
+                );
+            }
         }
     } else if let Some(path) = single_path {
         // Single file from picker, drop, folder scan, or OS "Open with" —
@@ -508,6 +516,7 @@ pub fn clear_library(
     state.gallery_order.clear();
     state.gallery_generation = state.gallery_generation.wrapping_add(1);
     state.pending_gallery_reload = false;
+    state.pending_gallery_append = false;
     state.gallery_thumbs_pending = 0;
     state.gallery_thumbs_loaded = 0;
     state.gallery_thumbs_failed = 0;

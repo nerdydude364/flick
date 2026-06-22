@@ -2,6 +2,7 @@ use super::state::{AppState, Mode, SpriteStatus};
 use crate::AppWindow;
 use crate::PlaylistItemData;
 use crate::library::{MediaKind, media_kind};
+use libmpv2::Mpv;
 use slint::{Model, VecModel};
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -311,12 +312,41 @@ pub fn try_start_pending_gallery_reload(
     }
 }
 
+/// Flushes a tail-append deferred by `finish_import` because the grid was
+/// still generating thumbnails for an earlier batch. Runs once that
+/// generation finishes, folding in everything the queue grew by in the
+/// meantime — so a folder scan delivering hundreds of batches collapses into
+/// one append per settled generation instead of restarting the grid (wiping
+/// already-rendered thumbnails) on every batch that arrives mid-generation.
+pub fn try_start_pending_gallery_append(
+    mpv: &Mpv,
+    state: &mut AppState,
+    app: &AppWindow,
+    gallery: &super::gallery::GalleryContext<'_>,
+) {
+    if !state.pending_gallery_append || gallery_busy(state) {
+        return;
+    }
+    state.pending_gallery_append = false;
+    if !super::gallery::try_append_gallery_thumbnails(state, gallery)
+        && super::gallery::open_gallery_grid(
+            mpv,
+            app,
+            state,
+            gallery,
+            super::gallery::GalleryReload::IfStale,
+        )
+    {
+        super::gallery::run_pending_gallery_reload(state, app, gallery);
+    }
+}
+
 /// Ends the import loading session once sidebar and gallery work are idle.
 pub fn try_finish_import_session(state: &mut AppState, app: &AppWindow) {
     if !state.library_loading {
         return;
     }
-    if playlist_busy(state) || gallery_busy(state) {
+    if playlist_busy(state) || gallery_busy(state) || state.pending_gallery_append {
         return;
     }
     state.library_loading = false;

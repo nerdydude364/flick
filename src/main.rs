@@ -1340,8 +1340,10 @@ fn main() {
                     };
                     let mut state_ref = state.borrow_mut();
                     ui_bridge::try_start_pending_gallery_reload(&mut state_ref, &app, &gallery);
+                    ui_bridge::try_start_pending_gallery_append(&mpv, &mut state_ref, &app, &gallery);
                     ui_bridge::try_finish_import_session(&mut state_ref, &app);
                     ui_bridge::try_start_pending_gallery_reload(&mut state_ref, &app, &gallery);
+                    ui_bridge::try_start_pending_gallery_append(&mpv, &mut state_ref, &app, &gallery);
                 }
                 while let Ok((hash, ok)) = sprite_rx.try_recv() {
                     ui_bridge::apply_sprite_result(&app, &mut state.borrow_mut(), &model, hash, ok);
