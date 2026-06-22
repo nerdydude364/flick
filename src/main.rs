@@ -1231,19 +1231,24 @@ fn wire_playlist_navigation(
 /// effect on this app — nothing in the windowing/GUI stack reacts to them
 /// on its own, so without this the process needs a force-kill (`SIGKILL`)
 /// to go away at all, and never runs the normal Slint shutdown path.
-/// `quit_event_loop` is documented as callable from any thread, so a
-/// dedicated thread blocking on the signal is enough; no unsafe
-/// signal-handler code needed.
+/// Uses `signal_hook::flag` (an async-signal-safe atomic flag set from the
+/// real signal handler) plus a polling thread, rather than `signal_hook::iterator`
+/// — the iterator backend is gated `not(windows)` (it relies on a Unix
+/// self-pipe), so it fails to build on Windows targets; `flag::register` is
+/// cross-platform. `quit_event_loop` is documented as callable from any
+/// thread, so calling it from the polling thread is safe.
 fn install_signal_quit_handler() {
-    let mut signals = signal_hook::iterator::Signals::new([
-        signal_hook::consts::SIGINT,
-        signal_hook::consts::SIGTERM,
-    ])
-    .expect("failed to register signal handlers");
-    std::thread::spawn(move || {
-        for _ in signals.forever() {
-            let _ = slint::quit_event_loop();
+    let quit_requested = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    for sig in [signal_hook::consts::SIGINT, signal_hook::consts::SIGTERM] {
+        if signal_hook::flag::register(sig, quit_requested.clone()).is_err() {
+            return;
         }
+    }
+    std::thread::spawn(move || {
+        while !quit_requested.load(std::sync::atomic::Ordering::Relaxed) {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        let _ = slint::quit_event_loop();
     });
 }
 
