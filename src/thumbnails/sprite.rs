@@ -174,11 +174,33 @@ pub fn load_cached_sprite(hash: &str) -> Option<(slint::Image, SpriteMeta)> {
         return Some(hit);
     }
     if !cache::is_cached(hash) {
+        crate::flick_debug!("[sprite] cache entry missing hash {hash}");
         return None;
     }
-    let meta_json = std::fs::read_to_string(cache::meta_file(hash)).ok()?;
-    let meta: SpriteMeta = serde_json::from_str(&meta_json).ok()?;
-    let image = slint::Image::load_from_path(&cache::sprite_file(hash)).ok()?;
+    let meta_json = match std::fs::read_to_string(cache::meta_file(hash)) {
+        Ok(json) => json,
+        Err(err) => {
+            crate::flick_debug!("[sprite] meta read failed hash {hash}: {err}");
+            return None;
+        }
+    };
+    let meta: SpriteMeta = match serde_json::from_str(&meta_json) {
+        Ok(meta) => meta,
+        Err(err) => {
+            crate::flick_debug!("[sprite] meta parse failed hash {hash}: {err}");
+            return None;
+        }
+    };
+    let image = match slint::Image::load_from_path(&cache::sprite_file(hash)) {
+        Ok(image) => image,
+        Err(err) => {
+            crate::flick_debug!(
+                "[sprite] image decode failed hash {hash} ({}): {err}",
+                cache::sprite_file(hash).display()
+            );
+            return None;
+        }
+    };
     SPRITE_MEMORY_CACHE.with(|cache| {
         cache
             .borrow_mut()

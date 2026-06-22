@@ -30,7 +30,10 @@ fn poster_image_for_hash(hash: &str) -> Option<slint::Image> {
         if let Some(image) = cache.borrow().get(hash) {
             return Some(image.clone());
         }
-        let image = crate::thumbnails::load_cached_poster(hash)?;
+        let image = match crate::thumbnails::load_cached_poster(hash) {
+            Some(image) => image,
+            None => return None,
+        };
         let mut cache = cache.borrow_mut();
         if cache.len() >= POSTER_IMAGE_CACHE_MAX
             && let Some(oldest) = cache.keys().next().cloned()
@@ -43,13 +46,23 @@ fn poster_image_for_hash(hash: &str) -> Option<slint::Image> {
 }
 
 fn playlist_row_thumbnail(path: &Path) -> slint::Image {
-    let Some(hash) = crate::thumbnails::hash::hash_video_file_cached(path).ok() else {
-        return transparent_row_thumbnail();
+    let hash = match crate::thumbnails::hash::hash_video_file_cached(path) {
+        Ok(hash) => hash,
+        Err(err) => {
+            crate::flick_debug!("[playlist thumb] hash failed {}: {err}", path.display());
+            return transparent_row_thumbnail();
+        }
     };
     if !crate::thumbnails::cache::poster_is_ready(&hash) {
         return transparent_row_thumbnail();
     }
-    poster_image_for_hash(&hash).unwrap_or_else(transparent_row_thumbnail)
+    poster_image_for_hash(&hash).unwrap_or_else(|| {
+        crate::flick_debug!(
+            "[playlist thumb] decode failed {} hash {hash}",
+            path.display()
+        );
+        transparent_row_thumbnail()
+    })
 }
 
 pub struct PlaylistRebuildJob {

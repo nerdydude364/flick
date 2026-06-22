@@ -256,6 +256,10 @@ fn run_thumbnail_pool(generation: u64, items: Vec<ThumbWorkItem>, tx: Sender<Gal
                 let Some(item) = items.get(i) else { break };
                 let hash = generate_poster_hash(&item.path, item.is_video);
                 if tx.send((generation, item.grid_pos, hash)).is_err() {
+                    crate::flick_debug!(
+                        "[gallery thumb] result channel closed for {}",
+                        item.path.display()
+                    );
                     break;
                 }
             }
@@ -267,21 +271,31 @@ fn run_thumbnail_pool(generation: u64, items: Vec<ThumbWorkItem>, tx: Sender<Gal
 }
 
 fn generate_poster_hash(path: &std::path::Path, is_video: bool) -> Option<String> {
+    let kind = if is_video { "video" } else { "image" };
     for attempt in 0..GENERATION_RETRIES {
         let hash = if is_video {
             crate::thumbnails::ensure_video_poster_cached(path)
         } else {
             crate::thumbnails::ensure_poster_cached(path)
         };
-        if let Some(ref h) = hash
-            && crate::thumbnails::cache::poster_is_ready(h)
-        {
-            return hash;
+        if let Some(ref h) = hash {
+            if crate::thumbnails::cache::poster_is_ready(h) {
+                return hash;
+            }
+            crate::flick_debug!(
+                "[gallery thumb] poster not ready {} ({kind}) hash {h} (attempt {})",
+                path.display(),
+                attempt + 1
+            );
         }
         if attempt + 1 < GENERATION_RETRIES {
             std::thread::sleep(std::time::Duration::from_millis(30));
         }
     }
+    crate::flick_debug!(
+        "[gallery thumb] generation exhausted {} ({kind})",
+        path.display()
+    );
     None
 }
 
@@ -438,9 +452,32 @@ fn finish_gallery_batch(
 ) {
     let failed = failed_gallery_positions(gallery.failed_flags);
     if !failed.is_empty() && state.gallery_thumb_retry_pass < MAX_GALLERY_RETRY_PASSES {
+        crate::flick_debug!(
+            "[gallery thumb] retry pass {} for {} failed item(s)",
+            state.gallery_thumb_retry_pass + 1,
+            failed.len()
+        );
         retry_failed_gallery_thumbnails(state, gallery, failed);
         sync_loading_ui(app, state);
         return;
+    }
+
+    if !failed.is_empty()
+        && let Some((_, paths, is_video)) = gallery_source(state)
+    {
+        for pos in failed {
+            if let Some(path) = paths.get(pos) {
+                let kind = if is_video.get(pos).copied().unwrap_or(false) {
+                    "video"
+                } else {
+                    "image"
+                };
+                crate::flick_debug!(
+                    "[gallery thumb] permanent failure {} ({kind})",
+                    path.display()
+                );
+            }
+        }
     }
 
     state.gallery_thumb_retry_pass = 0;
@@ -466,6 +503,19 @@ pub fn apply_gallery_thumb(
             patch_playlist_thumbnail_for_hash(state, playlist_model, hash);
             true
         } else {
+            if let Some((_, paths, is_video)) = gallery_source(state)
+                && let Some(path) = paths.get(pos)
+            {
+                let kind = if is_video.get(pos).copied().unwrap_or(false) {
+                    "video"
+                } else {
+                    "image"
+                };
+                crate::flick_debug!(
+                    "[gallery thumb] ui decode failed {} ({kind}) hash {hash}",
+                    path.display()
+                );
+            }
             gallery.failed_flags.set_row_data(pos, true);
             false
         }

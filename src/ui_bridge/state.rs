@@ -143,7 +143,13 @@ impl AppState {
         if let Some(h) = self.sprite_hash.get(path) {
             return Some(h.clone());
         }
-        let hash = crate::thumbnails::hash::hash_video_file_cached(path).ok()?;
+        let hash = match crate::thumbnails::hash::hash_video_file_cached(path) {
+            Ok(hash) => hash,
+            Err(err) => {
+                crate::flick_debug!("[sprite] hash failed {}: {err}", path.display());
+                return None;
+            }
+        };
         self.sprite_hash.insert(path.to_path_buf(), hash.clone());
         Some(hash)
     }

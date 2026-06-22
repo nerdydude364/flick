@@ -47,6 +47,14 @@ pub fn sync_sprite_preview(app: &AppWindow, state: &mut AppState) {
                 return;
             };
             let Some((image, meta)) = thumbnails::load_cached_sprite(&hash) else {
+                if let Some(path) = current_video_path(state) {
+                    crate::flick_debug!(
+                        "[sprite] preview load failed {} hash {hash}",
+                        path.display()
+                    );
+                } else {
+                    crate::flick_debug!("[sprite] preview load failed hash {hash}");
+                }
                 clear_sprite_preview(app);
                 return;
             };
@@ -160,6 +168,10 @@ pub fn show_list_sprite_preview(app: &AppWindow, state: &mut AppState, queue_ind
         return;
     };
     let Some((image, meta)) = load_sprite_for_list_preview(app, state, queue_index, &hash) else {
+        crate::flick_debug!(
+            "[sprite] list preview load failed {} hash {hash}",
+            path.display()
+        );
         hide_list_sprite_preview(app);
         return;
     };
@@ -248,8 +260,19 @@ pub fn schedule_sprite_generation(
             let tx = sprite_tx.clone();
             let path = path.clone();
             std::thread::spawn(move || {
-                let ok = thumbnails::generate_sprite(&path).is_ok();
-                let _ = tx.send((hash, ok));
+                let ok = match thumbnails::generate_sprite(&path) {
+                    Ok(()) => true,
+                    Err(err) => {
+                        crate::flick_debug!("[sprite] generate failed {}: {err}", path.display());
+                        false
+                    }
+                };
+                if tx.send((hash, ok)).is_err() {
+                    crate::flick_debug!(
+                        "[sprite] result channel closed for {} (ok={ok})",
+                        path.display()
+                    );
+                }
             });
         },
     );

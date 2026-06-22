@@ -1,5 +1,6 @@
 slint::include_modules!();
 
+mod debug;
 mod dialogs;
 mod import;
 mod library;

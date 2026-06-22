@@ -19,23 +19,47 @@ pub fn ensure_poster_cached(path: &Path) -> Option<String> {
     // Generic content hash (size + head/tail chunks) — named for its
     // original video-sprite use but not video-specific, so it doubles as
     // the poster cache key here.
-    let hash = hash_video_file_cached(path).ok()?;
+    let hash = match hash_video_file_cached(path) {
+        Ok(hash) => hash,
+        Err(err) => {
+            crate::flick_debug!("[poster] hash failed {}: {err}", path.display());
+            return None;
+        }
+    };
     if cache::is_poster_cached(&hash) {
         return Some(hash);
     }
     {
-        let img = image::open(path).ok()?;
+        let img = match image::open(path) {
+            Ok(img) => img,
+            Err(err) => {
+                crate::flick_debug!("[poster] open failed {}: {err}", path.display());
+                return None;
+            }
+        };
         // JPEG has no alpha channel — drop it (transparent source images
         // just get an implicit black background in the thumbnail).
         let thumb = img
             .resize_to_fill(POSTER_SIZE, POSTER_SIZE, FilterType::Triangle)
             .to_rgb8();
         let mut jpeg_bytes = Vec::new();
-        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg_bytes, 82)
+        if let Err(err) = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg_bytes, 82)
             .encode_image(&thumb)
-            .ok()?;
-        cache::write_atomic(&cache::poster_file(&hash), &jpeg_bytes).ok()?;
-        wait_for_poster_ready(&hash, Duration::from_millis(200))?;
+        {
+            crate::flick_debug!("[poster] jpeg encode failed {}: {err}", path.display());
+            return None;
+        }
+        if let Err(err) = cache::write_atomic(&cache::poster_file(&hash), &jpeg_bytes) {
+            crate::flick_debug!("[poster] cache write failed {}: {err}", path.display());
+            return None;
+        }
+        if wait_for_poster_ready(&hash, Duration::from_millis(200)).is_none() {
+            crate::flick_debug!(
+                "[poster] visibility timeout {} (hash {hash})",
+                path.display()
+            );
+            return None;
+        }
     }
     Some(hash)
 }
@@ -61,7 +85,16 @@ fn wait_for_poster_ready(hash: &str, timeout: Duration) -> Option<()> {
 /// Loads a previously cached poster thumbnail by content hash. Must run on
 /// the UI thread — see `ensure_poster_cached`'s doc comment.
 pub fn load_cached_poster(hash: &str) -> Option<slint::Image> {
-    slint::Image::load_from_path(&cache::poster_file(hash)).ok()
+    match slint::Image::load_from_path(&cache::poster_file(hash)) {
+        Ok(image) => Some(image),
+        Err(err) => {
+            crate::flick_debug!(
+                "[poster] slint decode failed hash {hash} ({}): {err}",
+                cache::poster_file(hash).display()
+            );
+            None
+        }
+    }
 }
 
 /// UI-thread decode with short retries — workers already block until the JPEG
@@ -78,5 +111,9 @@ pub fn load_cached_poster_with_retry(hash: &str, attempts: usize) -> Option<slin
             std::thread::sleep(Duration::from_millis(2));
         }
     }
+    let ready = cache::poster_is_ready(hash);
+    crate::flick_debug!(
+        "[poster] ui load exhausted hash {hash} after {attempts} attempts (ready={ready})"
+    );
     None
 }
