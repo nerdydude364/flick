@@ -49,6 +49,16 @@ pub struct AppState {
     /// `current_order()` (which could have drifted, e.g. a search query
     /// change, since the grid was built).
     pub gallery_order: Vec<usize>,
+    /// Which mode `gallery_order`/the rendered thumbnails belong to. Video,
+    /// Image, and All each keep independent `Queue`s, but an unshuffled,
+    /// unfiltered `current_order()` is always `[0, 1, 2, ...]` regardless of
+    /// which queue produced it — so a plain value comparison of `gallery_order`
+    /// can't tell "still current" apart from "built for a different queue
+    /// that happens to have the same length right now". Checking this tag
+    /// first is what makes that distinction; without it, switching modes and
+    /// importing more media could make All mode reuse Video/Image mode's
+    /// stale thumbnails for the wrong items.
+    pub gallery_mode: Option<Mode>,
     /// Bumped every time the grid opens — background poster-thumbnail
     /// results are tagged with the generation active when they were
     /// requested, so results from a stale grid (closed/reopened, or the
@@ -112,6 +122,7 @@ impl AppState {
             all_current_is_video: false,
             gallery_open: false,
             gallery_order: Vec::new(),
+            gallery_mode: None,
             gallery_generation: 0,
             slideshow_on: false,
             slideshow_duration: 8.0,

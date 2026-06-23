@@ -517,6 +517,7 @@ pub fn clear_library(
     state.all_queue.clear();
     state.gallery_open = false;
     state.gallery_order.clear();
+    state.gallery_mode = None;
     state.gallery_generation = state.gallery_generation.wrapping_add(1);
     state.pending_gallery_reload = false;
     state.pending_gallery_append = false;
