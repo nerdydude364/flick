@@ -1383,6 +1383,13 @@ fn main() {
         let gallery_video_flags = Rc::clone(&gallery_video_flags);
         let gallery_tx = gallery_tx.clone();
         let drain_timer = slint::Timer::default();
+        // Bounds how many times a `LoadingFailed` core error auto-reloads the
+        // now-playing file before giving up and showing the error bar instead
+        // — a genuinely broken/missing file must not get retried forever.
+        // Reset to 0 on the next successful `FileLoaded`, so a later transient
+        // hiccup gets its own fresh budget.
+        const MAX_PLAYBACK_RECOVERY_ATTEMPTS: u32 = 2;
+        let mut playback_recovery_attempts: u32 = 0;
         drain_timer.start(
             slint::TimerMode::Repeated,
             std::time::Duration::from_millis(100),
@@ -1613,8 +1620,36 @@ fn main() {
                             }
                             _ => {}
                         },
+                        Some(Ok(libmpv2::events::Event::FileLoaded)) => {
+                            playback_recovery_attempts = 0;
+                        }
                         Some(Err(e)) => {
-                            app.set_error_message(e.to_string().into());
+                            let path = ui_bridge::current_video_path(&state.borrow());
+                            eprintln!(
+                                "playback core error ({}): {e}",
+                                path.as_deref()
+                                    .map(|p| p.display().to_string())
+                                    .unwrap_or_else(|| "no file".to_string())
+                            );
+                            let is_load_failure = matches!(
+                                e,
+                                libmpv2::Error::Raw(code) if code == libmpv2::mpv_error::LoadingFailed
+                            );
+                            if is_load_failure
+                                && playback_recovery_attempts < MAX_PLAYBACK_RECOVERY_ATTEMPTS
+                                && let Some(path) = path
+                            {
+                                playback_recovery_attempts += 1;
+                                let resume_at = app.get_current_time();
+                                let start_opt = format!("start={resume_at}");
+                                let _ = mpv.command(
+                                    "loadfile",
+                                    &[&path.to_string_lossy(), "replace", &start_opt],
+                                );
+                                ui_bridge::show_toast(&app, "Playback hiccup — recovering…", false);
+                            } else {
+                                app.set_error_message(ui_bridge::describe_mpv_core_error(&e).into());
+                            }
                         }
                         Some(Ok(_)) => {}
                         None => break,
