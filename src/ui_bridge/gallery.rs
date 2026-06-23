@@ -129,6 +129,9 @@ fn current_gallery_order(state: &AppState) -> Vec<usize> {
 }
 
 fn gallery_grid_is_current(state: &AppState, thumb_count: usize) -> bool {
+    if state.gallery_mode != Some(state.mode) {
+        return false;
+    }
     if state.gallery_order.is_empty() || thumb_count == 0 {
         return false;
     }
@@ -141,12 +144,14 @@ fn gallery_grid_is_current(state: &AppState, thumb_count: usize) -> bool {
 fn prime_gallery_loading_state(state: &mut AppState) {
     let Some((order, paths, _)) = gallery_source(state) else {
         state.gallery_order.clear();
+        state.gallery_mode = None;
         state.gallery_thumbs_pending = 0;
         state.gallery_thumbs_loaded = 0;
         state.gallery_thumbs_failed = 0;
         return;
     };
     state.gallery_order = order;
+    state.gallery_mode = Some(state.mode);
     state.gallery_thumbs_pending = paths.len();
     state.gallery_thumbs_loaded = 0;
     state.gallery_thumbs_failed = 0;
@@ -320,6 +325,7 @@ fn spawn_gallery_thumb_workers(
 fn load_gallery_thumbnails(state: &mut AppState, gallery: &GalleryContext<'_>) {
     let Some((order, paths, is_video)) = gallery_source(state) else {
         state.gallery_order.clear();
+        state.gallery_mode = None;
         state.gallery_thumbs_pending = 0;
         state.gallery_thumbs_loaded = 0;
         state.gallery_thumbs_failed = 0;
@@ -333,6 +339,7 @@ fn load_gallery_thumbnails(state: &mut AppState, gallery: &GalleryContext<'_>) {
     state.gallery_generation += 1;
     let generation = state.gallery_generation;
     state.gallery_order = order;
+    state.gallery_mode = Some(state.mode);
     state.gallery_thumbs_pending = paths.len();
     state.gallery_thumbs_loaded = 0;
     state.gallery_thumbs_failed = 0;
@@ -356,6 +363,16 @@ pub fn try_append_gallery_thumbnails(state: &mut AppState, gallery: &GalleryCont
     if state.gallery_open || gallery_busy(state) {
         return false;
     }
+    // An unshuffled, unfiltered order is always `[0, 1, 2, ...]` no matter
+    // which queue produced it, so the prefix check below can't by itself
+    // tell "this grid is still Video mode's" apart from "this grid happens
+    // to start with the same numbers All mode's queue does right now" —
+    // requiring the existing grid to already belong to the current mode is
+    // what catches that case instead of appending onto the wrong queue's
+    // leftover thumbnails (see `gallery_mode`'s doc comment).
+    if state.gallery_mode != Some(state.mode) {
+        return false;
+    }
     let Some((order, paths, is_video)) = gallery_source(state) else {
         return false;
     };
@@ -373,6 +390,7 @@ pub fn try_append_gallery_thumbnails(state: &mut AppState, gallery: &GalleryCont
     state.gallery_generation += 1;
     let generation = state.gallery_generation;
     state.gallery_order = order;
+    state.gallery_mode = Some(state.mode);
     state.gallery_thumb_retry_pass = 0;
     state.gallery_thumbs_pending = state.gallery_thumbs_pending.saturating_add(new_count);
 

@@ -1,6 +1,6 @@
 use super::gallery::GalleryContext;
 use super::gif::decode_gif;
-use super::loading::{rebuild_playlist_model, sync_loading_ui};
+use super::loading::{patch_now_playing, rebuild_playlist_model, sync_loading_ui};
 use super::log_mpv_err;
 use super::sprite_preview::{clear_sprite_preview, hide_list_sprite_preview, sync_sprite_preview};
 use super::state::{AppState, Mode};
@@ -41,6 +41,7 @@ pub fn play_index(
     if state.queue.item(index).is_none() {
         return;
     }
+    let old_index = state.queue.now_playing();
     state.queue.set_now_playing(Some(index));
     state.gallery_open = true;
     app.set_gallery_open(true);
@@ -53,7 +54,7 @@ pub fn play_index(
     app.set_playing(true);
     sync_sprite_preview(app, state);
     sync_video_view_ui(app, state);
-    rebuild_playlist_model(state, model);
+    patch_now_playing(state, model, old_index, Some(index));
 }
 
 /// All-mode: present a video from `all_queue` via mpv.
@@ -113,6 +114,7 @@ pub fn present_item(
         return;
     };
     let path = item.path.clone();
+    let old_index = state.all_queue.now_playing();
     state.all_queue.set_now_playing(Some(index));
     state.gallery_open = true;
     app.set_gallery_open(true);
@@ -123,7 +125,7 @@ pub fn present_item(
         MediaKind::Image => show_all_image(mpv, app, state, &path),
     }
     sync_all_view_ui(app, state);
-    rebuild_playlist_model(state, model);
+    patch_now_playing(state, model, old_index, Some(index));
 }
 
 /// Shows `index` from the image queue in the gallery view — image-mode only.
@@ -141,11 +143,12 @@ pub fn show_image_at(
         return;
     }
     stop_mpv_for_image_mode(mpv, app);
+    let old_index = state.image_queue.now_playing();
     state.image_queue.set_now_playing(Some(index));
     state.gallery_open = true;
     reset_image_view_transform(app);
     sync_image_viewer_ui(app, state);
-    rebuild_playlist_model(state, model);
+    patch_now_playing(state, model, old_index, Some(index));
 }
 
 pub fn navigate_image_relative(
@@ -514,6 +517,7 @@ pub fn clear_library(
     state.all_queue.clear();
     state.gallery_open = false;
     state.gallery_order.clear();
+    state.gallery_mode = None;
     state.gallery_generation = state.gallery_generation.wrapping_add(1);
     state.pending_gallery_reload = false;
     state.pending_gallery_append = false;
@@ -701,6 +705,11 @@ pub fn remove_item(
                 rebuild_playlist_model(state, model);
             }
             RemoveOutcome::NowPlayingChanged(new_index) => {
+                // Item count changed, so the model needs a real structural
+                // rebuild — do that first so `play_index`'s lightweight
+                // now-playing patch (now a no-op, since `remove_at` already
+                // updated `now_playing` to `new_index`) lands on correct rows.
+                rebuild_playlist_model(state, model);
                 play_index(mpv, app, state, model, new_index)
             }
             RemoveOutcome::NoPlaybackChange => rebuild_playlist_model(state, model),
@@ -712,6 +721,7 @@ pub fn remove_item(
                 rebuild_playlist_model(state, model);
             }
             RemoveOutcome::NowPlayingChanged(new_index) => {
+                rebuild_playlist_model(state, model);
                 show_image_at(mpv, app, state, model, new_index)
             }
             RemoveOutcome::NoPlaybackChange => {
@@ -735,6 +745,7 @@ pub fn remove_item(
                 }
                 RemoveOutcome::NowPlayingChanged(new_index) => {
                     remove_from_typed_queues(state, &path);
+                    rebuild_playlist_model(state, model);
                     present_item(mpv, app, state, model, new_index);
                 }
                 RemoveOutcome::NoPlaybackChange => {

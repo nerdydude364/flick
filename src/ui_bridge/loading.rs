@@ -244,6 +244,42 @@ pub fn rebuild_playlist_model(state: &mut AppState, model: &VecModel<PlaylistIte
     schedule_playlist_rebuild(state, model);
 }
 
+/// Patches just the `playing` flag for the rows whose now-playing state
+/// changed, instead of rebuilding the whole sidebar model. A full rebuild
+/// recreates every row's `PlaylistItemData` (including a fresh `slint::Image`
+/// clone for the thumbnail) and replaces the model in one shot, which Slint
+/// treats as every row changing — visible as the whole list's thumbnails
+/// flashing blank and reappearing on every selection change. Selecting a
+/// different item never changes anything else about the other rows, so this
+/// only touches the old and new now-playing rows.
+pub fn patch_now_playing(
+    state: &AppState,
+    model: &VecModel<PlaylistItemData>,
+    old_index: Option<usize>,
+    new_index: Option<usize>,
+) {
+    if old_index == new_index {
+        return;
+    }
+    let (filtered, _, _) = playlist_view(state);
+    for (queue_index, playing) in [(old_index, false), (new_index, true)] {
+        let Some(queue_index) = queue_index else {
+            continue;
+        };
+        let Some(display_index) = filtered.iter().position(|&i| i == queue_index) else {
+            continue;
+        };
+        let Some(mut row) = model.row_data(display_index) else {
+            continue;
+        };
+        if row.playing == playing {
+            continue;
+        }
+        row.playing = playing;
+        model.set_row_data(display_index, row);
+    }
+}
+
 /// Updates the sprite-status glyph for the row matching `hash` without rebuilding
 /// the whole sidebar model — used when a background sprite job finishes.
 pub(crate) fn patch_sprite_status_for_hash(
