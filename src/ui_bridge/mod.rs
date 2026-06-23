@@ -24,7 +24,7 @@ pub use playback::{
     sync_all_view_ui, sync_image_viewer_ui, toggle_slideshow,
 };
 pub use sprite_preview::{
-    apply_sprite_result, hide_list_sprite_preview, schedule_sprite_generation,
+    apply_sprite_result, current_video_path, hide_list_sprite_preview, schedule_sprite_generation,
     schedule_sprite_generation_for_now_playing, show_list_sprite_preview,
 };
 pub use state::{AppState, Mode};
@@ -46,6 +46,21 @@ pub(crate) fn log_mpv_err<T>(label: &str, result: Result<T, libmpv2::Error>) -> 
             eprintln!("{label} failed: {err}");
             false
         }
+    }
+}
+
+/// Human-readable text for a core-level mpv error caught on the playback
+/// event client. Without this, the red error bar used to show `Error`'s bare
+/// Debug output (e.g. "Raw(-13)") straight from libmpv2 — meaningless to a
+/// user, since `MPV_ERROR_LOADING_FAILED` and friends are undocumented to
+/// anyone outside of mpv's own client.h.
+pub(crate) fn describe_mpv_core_error(err: &libmpv2::Error) -> String {
+    match err {
+        libmpv2::Error::Raw(code) if *code == libmpv2::mpv_error::LoadingFailed => {
+            "Playback stopped: the video failed to load (file read error)".to_string()
+        }
+        libmpv2::Error::Raw(code) => format!("Playback error (mpv code {code})"),
+        other => format!("Playback error: {other}"),
     }
 }
 

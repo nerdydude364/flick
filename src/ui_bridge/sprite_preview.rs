@@ -38,7 +38,7 @@ fn spawn_sprite_worker(tx: std::sync::mpsc::Sender<(String, bool)>, hash: String
     });
 }
 
-fn current_video_path(state: &AppState) -> Option<std::path::PathBuf> {
+pub fn current_video_path(state: &AppState) -> Option<std::path::PathBuf> {
     match state.mode {
         Mode::Video => state
             .queue
