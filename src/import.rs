@@ -152,11 +152,15 @@ fn hash_and_send_files(
                 let i = cursor.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 let Some(entry) = items.get(i) else { break };
                 if let Err(err) = crate::thumbnails::hash::hash_video_file_cached(&entry.1) {
-                    crate::flick_debug!("[import] content hash failed {}: {err}", entry.1.display());
+                    crate::flick_debug!(
+                        "[import] content hash failed {}: {err}",
+                        entry.1.display()
+                    );
                 }
                 batch.push(entry.clone());
                 if batch.len() >= IMPORT_HASH_CHUNK {
-                    let chunk = std::mem::replace(&mut batch, Vec::with_capacity(IMPORT_HASH_CHUNK));
+                    let chunk =
+                        std::mem::replace(&mut batch, Vec::with_capacity(IMPORT_HASH_CHUNK));
                     if tx.send((session, chunk)).is_err() {
                         return;
                     }
