@@ -1424,7 +1424,7 @@ dependencies = [
 
 [[package]]
 name = "flick"
-version = "1.6.9"
+version = "1.6.10"
 dependencies = [
  "dirs",
  "glow",
