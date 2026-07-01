@@ -110,6 +110,10 @@ pub struct AppState {
     pub pending_gallery_append: bool,
     /// Bumped on clear so in-flight folder-scan batches are ignored.
     pub library_session: u64,
+    /// Latest drag-scrub ratio from the progress bar, applied at most once
+    /// per drain-timer tick (see `ab_loop::apply_pending_scrub`) instead of
+    /// seeking on every raw pointer-move event.
+    pub pending_scrub_ratio: Option<f32>,
 }
 
 impl AppState {
@@ -146,6 +150,7 @@ impl AppState {
             pending_gallery_reload: false,
             pending_gallery_append: false,
             library_session: 0,
+            pending_scrub_ratio: None,
         }
     }
 
@@ -156,7 +161,7 @@ impl AppState {
     /// no-op if `path` is already cached.
     pub(crate) fn prime_sprite_hash(&mut self, path: PathBuf, hash: String) {
         crate::thumbnails::hash::prime_content_hash(path.clone(), hash.clone());
-        self.sprite_hash.entry(path).or_insert(hash);
+        self.sprite_hash.insert(path, hash);
     }
 
     /// Hash for `path`, computed and cached on first lookup.

@@ -159,6 +159,7 @@ export component AppWindow inherits Window {
     callback toggle-play();
     callback seek-relative(float /* seconds, +/- */);
     callback seek-to-ratio(float /* 0.0 - 1.0 */);
+    callback scrub-to-ratio(float /* 0.0 - 1.0, fired on every drag tick */);
     callback volume-changed(float /* 0-100, matches mpv's native volume range */);
     callback toggle-fullscreen();
     callback previous-track();
@@ -488,6 +489,7 @@ export component AppWindow inherits Window {
                     sprite-thumb-w: root.sprite-thumb-w;
                     sprite-thumb-h: root.sprite-thumb-h;
                     clicked-ratio(ratio) => { seek-to-ratio(ratio); key-handler.focus(); }
+                    scrub-ratio(ratio) => { scrub-to-ratio(ratio); }
                 }
                 Text {
                     text: duration-text;

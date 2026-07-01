@@ -100,5 +100,4 @@ Background work (folder scanning, sprite generation) runs on plain OS threads an
 ## Known limitations
 
 - The packaged Linux `.deb`/`.AppImage` statically link mpv/ffmpeg/libass/libplacebo, so they have no runtime dependency on the target's own mpv version — verified by installing/running both on clean Ubuntu 22.04 and 24.04 containers (no mpv installed at all) and the AppImage on Fedora, with no mpv-related dynamic dependency in `readelf -d`/`ldd` output on any of them.
-- Progress-bar/volume scrubbing seeks on every drag tick rather than only on release.
 - Shuffle and loop are single global toggles shared by both the video and image queues (each queue keeps its own shuffle order, but one pair of switches drives both).
