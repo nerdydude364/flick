@@ -74,48 +74,105 @@ pub struct ImportContext<'a> {
     pub state: &'a Rc<RefCell<AppState>>,
     pub model: &'a Rc<VecModel<crate::PlaylistItemData>>,
     pub scan_tx: &'a std::sync::mpsc::Sender<Vec<library::ScannedFile>>,
-    pub file_import_tx: &'a std::sync::mpsc::Sender<FileImportBatch>,
+    pub file_import_tx: &'a std::sync::mpsc::Sender<(u64, FileImportBatch)>,
     pub gallery: ui_bridge::GalleryContext<'a>,
 }
+
+/// Bounded worker pool width for hashing a picked/dropped-file batch —
+/// matches `gallery.rs::CONCURRENCY`'s reasoning: enough parallelism to not
+/// serialize on one slow file, not so much that it floods the disk/CPU.
+const IMPORT_HASH_WORKERS: usize = 4;
+/// Progressive delivery chunk size, matching `library::scan::SCAN_BATCH_SIZE`
+/// — lets the sidebar/gallery start populating before the whole batch (which
+/// can be thousands of files) finishes hashing.
+const IMPORT_HASH_CHUNK: usize = 50;
 
 /// Loads media files into the queue and kicks off background folder scans —
 /// shared by the file picker, drag-and-drop, CLI args, and OS "Open with"
 /// file-association launches (all converge on `enqueue_paths` / `finish_import`).
+///
+/// Everything expensive — including `partition_paths`'s `is_dir()` `stat()`
+/// per path — runs on a background thread. `partition_paths` used to run
+/// synchronously here, which for a large batch of picked/dropped paths on
+/// slow or network-mounted storage was a direct, visible UI freeze.
 pub fn import_paths(paths: Vec<PathBuf>, ctx: &ImportContext<'_>) {
     if paths.is_empty() {
         return;
     }
-    let (files, folders) = partition_paths(paths);
-    if !files.is_empty() {
-        {
-            let mut state = ctx.state.borrow_mut();
-            state.library_loading = true;
-            state.library_loading_message = "Reading files…".into();
+    let session = {
+        let mut state = ctx.state.borrow_mut();
+        state.library_loading = true;
+        if state.library_loading_message.is_empty() {
+            state.library_loading_message = "Importing…".into();
         }
-        ui_bridge::sync_loading_ui(ctx.app, &mut ctx.state.borrow_mut());
-        let tx = ctx.file_import_tx.clone();
-        std::thread::spawn(move || {
-            let named = named_media_entries(files);
-            for (_, path, _) in &named {
-                if let Err(err) = crate::thumbnails::hash::hash_video_file_cached(path) {
-                    crate::flick_debug!("[import] content hash failed {}: {err}", path.display());
+        state.library_session
+    };
+    ui_bridge::sync_loading_ui(ctx.app, &mut ctx.state.borrow_mut());
+    let file_import_tx = ctx.file_import_tx.clone();
+    let scan_tx = ctx.scan_tx.clone();
+    std::thread::spawn(move || {
+        let (files, folders) = partition_paths(paths);
+        if !folders.is_empty() {
+            scan_folders(folders, &scan_tx);
+        }
+        if !files.is_empty() {
+            hash_and_send_files(files, session, &file_import_tx);
+        }
+    });
+}
+
+/// Hashes a picked/dropped-file batch with a small bounded worker pool
+/// (mirroring `gallery.rs::run_thumbnail_pool`'s shared-cursor design)
+/// instead of one sequential thread, delivering results progressively in
+/// `IMPORT_HASH_CHUNK`-sized batches (mirroring `scan_folder`'s batching)
+/// instead of one all-or-nothing send at the end. `hash_video_file_cached`
+/// itself is bounded (see `thumbnails::hash::hash_video_file_bounded`), so a
+/// single stalled read (network mount, disconnected drive) blocks at most
+/// one of `IMPORT_HASH_WORKERS` workers rather than the whole batch.
+fn hash_and_send_files(
+    files: Vec<PathBuf>,
+    session: u64,
+    tx: &std::sync::mpsc::Sender<(u64, FileImportBatch)>,
+) {
+    let named = named_media_entries(files);
+    if named.is_empty() {
+        return;
+    }
+    let items = std::sync::Arc::new(named);
+    let cursor = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let workers = IMPORT_HASH_WORKERS.min(items.len());
+    let mut handles = Vec::with_capacity(workers);
+    for _ in 0..workers {
+        let items = std::sync::Arc::clone(&items);
+        let cursor = std::sync::Arc::clone(&cursor);
+        let tx = tx.clone();
+        handles.push(std::thread::spawn(move || {
+            let mut batch = Vec::with_capacity(IMPORT_HASH_CHUNK);
+            loop {
+                let i = cursor.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                let Some(entry) = items.get(i) else { break };
+                if let Err(err) = crate::thumbnails::hash::hash_video_file_cached(&entry.1) {
+                    crate::flick_debug!(
+                        "[import] content hash failed {}: {err}",
+                        entry.1.display()
+                    );
+                }
+                batch.push(entry.clone());
+                if batch.len() >= IMPORT_HASH_CHUNK {
+                    let chunk =
+                        std::mem::replace(&mut batch, Vec::with_capacity(IMPORT_HASH_CHUNK));
+                    if tx.send((session, chunk)).is_err() {
+                        return;
+                    }
                 }
             }
-            if tx.send(named).is_err() {
-                crate::flick_debug!("[import] file import channel closed");
+            if !batch.is_empty() {
+                let _ = tx.send((session, batch));
             }
-        });
+        }));
     }
-    if !folders.is_empty() {
-        {
-            let mut state = ctx.state.borrow_mut();
-            state.library_loading = true;
-            if state.library_loading_message.is_empty() {
-                state.library_loading_message = "Scanning folder…".into();
-            }
-        }
-        ui_bridge::sync_loading_ui(ctx.app, &mut ctx.state.borrow_mut());
-        scan_folders(folders, ctx.scan_tx);
+    for handle in handles {
+        let _ = handle.join();
     }
 }
 

@@ -223,7 +223,7 @@ fn schedule_pending_gallery_reload(
 /// why loading a file has to wait until then.
 struct ImportWiring {
     scan_tx: std::sync::mpsc::Sender<Vec<library::ScannedFile>>,
-    file_import_tx: std::sync::mpsc::Sender<import::FileImportBatch>,
+    file_import_tx: std::sync::mpsc::Sender<(u64, import::FileImportBatch)>,
     startup_paths: Rc<RefCell<Vec<PathBuf>>>,
     gallery_model: Rc<VecModel<slint::Image>>,
     gallery_video_flags: Rc<VecModel<bool>>,
@@ -237,7 +237,7 @@ struct AppContext {
     state: Rc<RefCell<AppState>>,
     model: Rc<VecModel<PlaylistItemData>>,
     scan_tx: std::sync::mpsc::Sender<Vec<library::ScannedFile>>,
-    file_import_tx: std::sync::mpsc::Sender<import::FileImportBatch>,
+    file_import_tx: std::sync::mpsc::Sender<(u64, import::FileImportBatch)>,
     gallery_model: Rc<VecModel<slint::Image>>,
     gallery_video_flags: Rc<VecModel<bool>>,
     gallery_failed_flags: Rc<VecModel<bool>>,
@@ -404,6 +404,18 @@ fn wire_playback_controls(app: &AppWindow, mpv: &Rc<Mpv>, state: &Rc<RefCell<App
                 return;
             };
             ui_bridge::handle_progress_click(&mpv, &app, &mut state.borrow_mut(), ratio);
+        });
+    }
+
+    {
+        let mpv = Rc::clone(mpv);
+        let state = Rc::clone(state);
+        let app_weak = app.as_weak();
+        app.on_scrub_to_ratio(move |ratio| {
+            let Some(app) = app_weak.upgrade() else {
+                return;
+            };
+            ui_bridge::queue_scrub_ratio(&mpv, &app, &mut state.borrow_mut(), ratio);
         });
     }
 
@@ -1322,7 +1334,8 @@ fn main() {
     let startup_paths = Rc::new(RefCell::new(import::launch_paths_from_argv()));
 
     let (scan_tx, scan_rx) = std::sync::mpsc::channel::<Vec<library::ScannedFile>>();
-    let (file_import_tx, file_import_rx) = std::sync::mpsc::channel::<import::FileImportBatch>();
+    let (file_import_tx, file_import_rx) =
+        std::sync::mpsc::channel::<(u64, import::FileImportBatch)>();
     let (drop_tx, drop_rx) = std::sync::mpsc::channel::<PathBuf>();
 
     wire_video_underlay(
@@ -1397,6 +1410,7 @@ fn main() {
                 let Some(app) = app_weak.upgrade() else {
                     return;
                 };
+                ui_bridge::apply_pending_scrub(&mpv, &app, &mut state.borrow_mut());
                 let mut updated_thumb_hashes: Vec<String> = Vec::new();
                 while let Ok(result) = gallery_rx.try_recv() {
                     if let Some(hash) = ui_bridge::apply_gallery_thumb(
@@ -1421,11 +1435,27 @@ fn main() {
                         &updated_thumb_hashes,
                     );
                 }
-                let mut imported_file_batch = false;
-                while let Ok(batch) = file_import_rx.try_recv() {
-                    imported_file_batch = true;
+                // Coalesce every batch sitting in the channel (a background
+                // hashing pool can deliver several progressive chunks between
+                // ticks) into one `apply_file_import_batch` call, and drop
+                // any batch stamped with a `library_session` older than the
+                // current one — otherwise a large picked/dropped-file import
+                // whose hashing outlives a `clear_library()` call would still
+                // silently repopulate the queue once it finishes.
+                let mut imported_file_batch: import::FileImportBatch = Vec::new();
+                while let Ok((session, batch)) = file_import_rx.try_recv() {
+                    if session == state.borrow().library_session {
+                        imported_file_batch.extend(batch);
+                    } else {
+                        crate::flick_debug!(
+                            "[import] discarding stale file-import batch (session {session})"
+                        );
+                    }
+                }
+                let has_file_import = !imported_file_batch.is_empty();
+                if has_file_import {
                     import::apply_file_import_batch(
-                        batch,
+                        imported_file_batch,
                         &import::ImportContext {
                             app: &app,
                             mpv: &mpv,
@@ -1442,7 +1472,7 @@ fn main() {
                         },
                     );
                 }
-                if imported_file_batch {
+                if has_file_import {
                     // Covers the cold-start single-file autoplay (CLI args,
                     // "Open with Flick", drag-drop, or the file picker all
                     // converge here) — a freshly imported single video

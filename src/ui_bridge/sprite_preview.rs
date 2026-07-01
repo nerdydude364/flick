@@ -22,10 +22,21 @@ const MAX_PARALLEL_SPRITE_JOBS: usize = 2;
 /// must not waste the work already done or leave it to restart later.
 fn spawn_sprite_worker(tx: std::sync::mpsc::Sender<(String, bool)>, hash: String, path: PathBuf) {
     std::thread::spawn(move || {
-        let ok = match thumbnails::generate_sprite(&path) {
-            Ok(()) => true,
-            Err(err) => {
+        // Caught rather than left to unwind: an escaping panic here would
+        // kill this thread before `tx.send` runs, leaking one of only
+        // `MAX_PARALLEL_SPRITE_JOBS` concurrent slots forever (since
+        // `apply_sprite_result`, which decrements `sprite_active`, would
+        // never see this job complete).
+        let ok = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            thumbnails::generate_sprite(&path)
+        })) {
+            Ok(Ok(())) => true,
+            Ok(Err(err)) => {
                 crate::flick_debug!("[sprite] generate failed {}: {err}", path.display());
+                false
+            }
+            Err(_) => {
+                crate::flick_debug!("[sprite] generate panicked {}", path.display());
                 false
             }
         };

@@ -259,7 +259,21 @@ fn run_thumbnail_pool(generation: u64, items: Vec<ThumbWorkItem>, tx: Sender<Gal
             loop {
                 let i = cursor.fetch_add(1, Ordering::Relaxed);
                 let Some(item) = items.get(i) else { break };
-                let hash = generate_poster_hash(&item.path, item.is_video);
+                // Caught rather than left to unwind: an escaping panic here
+                // would kill this worker before it sends a result, so
+                // `gallery_thumbs_loaded + gallery_thumbs_failed` could never
+                // reach `gallery_thumbs_pending` again — leaving the
+                // "Loading library…" banner stuck forever.
+                let hash = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    generate_poster_hash(&item.path, item.is_video)
+                }))
+                .unwrap_or_else(|_| {
+                    crate::flick_debug!(
+                        "[gallery thumb] worker panicked on {}",
+                        item.path.display()
+                    );
+                    None
+                });
                 if tx.send((generation, item.grid_pos, hash)).is_err() {
                     crate::flick_debug!(
                         "[gallery thumb] result channel closed for {}",

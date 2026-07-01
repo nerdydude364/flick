@@ -31,7 +31,13 @@ export component ProgressBar inherits Rectangle {
 
     in property <bool> pointer-hidden: false;
 
+    // Fires once per press/release cycle (plain click or drag release) —
+    // the authoritative, frame-accurate seek.
     callback clicked-ratio(float);
+    // Fires on every drag tick — cheap, no FFI in the callback itself; the
+    // Rust side throttles this into a bounded number of fast/approximate
+    // seeks per second instead of one per pixel of mouse movement.
+    callback scrub-ratio(float);
 
     height: 20px;
     property <float> ratio: duration > 0 ? max(0.0, min(1.0, current-time / duration)) : 0.0;
@@ -195,14 +201,19 @@ export component ProgressBar inherits Rectangle {
     drag := TouchArea {
         enabled: !root.pointer-hidden;
         mouse-cursor: root.pointer-hidden ? none : default;
-        clicked => {
-            if (self.width > 0px) {
-                clicked-ratio(self.mouse-x / self.width);
+        // `pointer-event`'s `up` kind covers both a plain click (press+release
+        // with no movement) and a drag release, so exactly one authoritative
+        // seek fires per press/release cycle — replacing the old `clicked`
+        // handler, which combined with `moved` firing the same expensive
+        // callback on every raw pointer-move during a drag.
+        pointer-event(event) => {
+            if (event.button == PointerEventButton.left && event.kind == PointerEventKind.up && self.width > 0px) {
+                clicked-ratio(max(0.0, min(1.0, self.mouse-x / self.width)));
             }
         }
         moved => {
             if (self.pressed && self.width > 0px) {
-                clicked-ratio(max(0.0, min(1.0, self.mouse-x / self.width)));
+                scrub-ratio(max(0.0, min(1.0, self.mouse-x / self.width)));
             }
         }
     }
