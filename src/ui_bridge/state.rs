@@ -77,6 +77,9 @@ pub struct AppState {
     pub loop_on: bool,
     pub search_query: String,
     pub ab_loop: AbLoopState,
+    /// Keeps the screen/system awake while video or slideshow playback is
+    /// active; synced from the drain timer each tick (see `main.rs`).
+    pub wake_lock: crate::power::WakeLock,
     pub(crate) gif_animation: Option<GifAnimation>,
     /// path -> content hash, cached so we don't re-hash (read up to 128KB)
     /// on every model rebuild.
@@ -135,6 +138,7 @@ impl AppState {
             loop_on: false,
             search_query: String::new(),
             ab_loop: AbLoopState::Off,
+            wake_lock: crate::power::WakeLock::new(),
             gif_animation: None,
             sprite_hash: HashMap::new(),
             sprite_status: HashMap::new(),
