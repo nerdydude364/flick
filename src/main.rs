@@ -5,6 +5,7 @@ mod dialogs;
 mod import;
 mod library;
 mod playlist;
+mod power;
 mod reveal;
 mod thumbnails;
 mod ui_bridge;
@@ -1411,6 +1412,11 @@ fn main() {
                     return;
                 };
                 ui_bridge::apply_pending_scrub(&mpv, &app, &mut state.borrow_mut());
+                {
+                    let mut state_ref = state.borrow_mut();
+                    let should_stay_awake = app.get_playing() || state_ref.slideshow_on;
+                    state_ref.wake_lock.set_active(should_stay_awake);
+                }
                 let mut updated_thumb_hashes: Vec<String> = Vec::new();
                 while let Ok(result) = gallery_rx.try_recv() {
                     if let Some(hash) = ui_bridge::apply_gallery_thumb(
