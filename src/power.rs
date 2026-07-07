@@ -1,14 +1,15 @@
 //! Keeps the OS from locking the screen or sleeping while video or slideshow
-//! playback is active. Best-effort: if the platform mechanism isn't
-//! available (e.g. no `systemd-inhibit` on a non-systemd Linux system),
+//! playback is active. Best-effort: if no platform mechanism is available,
 //! playback still works — it's just not exempt from the normal idle timer.
 
 use std::process::{Child, Command, Stdio};
 
 pub struct WakeLock {
     active: bool,
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[cfg(target_os = "macos")]
     inhibitor: Option<Child>,
+    #[cfg(target_os = "linux")]
+    inhibitor: Option<LinuxInhibitor>,
 }
 
 impl WakeLock {
@@ -57,17 +58,33 @@ impl WakeLock {
         }
     }
 
-    // `systemd-inhibit` holds its lock for as long as the command it wraps
-    // keeps running, so it's wrapped around a loop that polls our own pid —
-    // same crash-safety reasoning as macOS's `-w` above, since there's no
-    // direct equivalent flag here.
+    // What actually stops the screen from locking/blanking on Linux is the
+    // desktop's own screensaver daemon (gnome-shell, kwin, xfce4-power-manager,
+    // ...), which all speak the same `org.freedesktop.ScreenSaver` D-Bus
+    // interface — the same one VLC/browsers use, and it works whether or not
+    // the session even involves systemd. `systemd-inhibit` only affects
+    // logind's own idle/suspend handling, which most desktop environments
+    // don't actually consult for screen-lock — it was necessary but not
+    // sufficient, which is why the first cut of this "worked" (a process
+    // existed) without actually keeping the screen unlocked. Try D-Bus first
+    // and only fall back to the logind wrapper (still useful for suspend, and
+    // for minimal window managers with no screensaver service) if that's
+    // unavailable.
     #[cfg(target_os = "linux")]
     fn engage(&mut self) {
+        if let Some(cookie) = Self::dbus_inhibit() {
+            self.inhibitor = Some(LinuxInhibitor::Dbus(cookie));
+            return;
+        }
+        // Fallback: wrap a loop that polls our own pid, so the lock can't
+        // outlive us even if `Drop` gets skipped (crash/force-kill) — same
+        // crash-safety reasoning as macOS's `-w` above, since `systemd-inhibit`
+        // has no equivalent flag.
         let watch = format!(
             "while kill -0 {} 2>/dev/null; do sleep 5; done",
             std::process::id()
         );
-        self.inhibitor = Command::new("systemd-inhibit")
+        if let Ok(child) = Command::new("systemd-inhibit")
             .args([
                 "--what=idle:sleep",
                 "--who=Flick",
@@ -80,15 +97,64 @@ impl WakeLock {
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()
-            .ok();
+        {
+            self.inhibitor = Some(LinuxInhibitor::Process(child));
+        }
     }
 
     #[cfg(target_os = "linux")]
     fn release(&mut self) {
-        if let Some(mut child) = self.inhibitor.take() {
-            let _ = child.kill();
-            let _ = child.wait();
+        match self.inhibitor.take() {
+            Some(LinuxInhibitor::Dbus(cookie)) => Self::dbus_uninhibit(cookie),
+            Some(LinuxInhibitor::Process(mut child)) => {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
+            None => {}
         }
+    }
+
+    /// Calls `ScreenSaver.Inhibit`, returning the cookie it hands back (needed
+    /// to release the same lock later) — `None` if `dbus-send` is missing, the
+    /// session bus has no screensaver service, or the reply couldn't be
+    /// parsed.
+    #[cfg(target_os = "linux")]
+    fn dbus_inhibit() -> Option<u32> {
+        let output = Command::new("dbus-send")
+            .args([
+                "--session",
+                "--print-reply",
+                "--dest=org.freedesktop.ScreenSaver",
+                "/org/freedesktop/ScreenSaver",
+                "org.freedesktop.ScreenSaver.Inhibit",
+                "string:Flick",
+                "string:Media playback",
+            ])
+            .output()
+            .ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .find_map(|line| line.trim().strip_prefix("uint32 "))
+            .and_then(|cookie| cookie.trim().parse().ok())
+    }
+
+    #[cfg(target_os = "linux")]
+    fn dbus_uninhibit(cookie: u32) {
+        let _ = Command::new("dbus-send")
+            .args([
+                "--session",
+                "--dest=org.freedesktop.ScreenSaver",
+                "/org/freedesktop/ScreenSaver",
+                "org.freedesktop.ScreenSaver.UnInhibit",
+                &format!("uint32:{cookie}"),
+            ])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
     }
 
     // Per-thread OS flag; Windows clears it automatically if the thread/process
@@ -120,6 +186,14 @@ impl Drop for WakeLock {
     fn drop(&mut self) {
         self.release();
     }
+}
+
+#[cfg(target_os = "linux")]
+enum LinuxInhibitor {
+    /// `org.freedesktop.ScreenSaver.Inhibit` cookie, released via `UnInhibit`.
+    Dbus(u32),
+    /// `systemd-inhibit` fallback child process, released by killing it.
+    Process(Child),
 }
 
 #[cfg(target_os = "windows")]
