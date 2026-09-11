@@ -4,7 +4,7 @@ version = "1.6.13"
 edition = "2024"
 
 [dependencies]
-dirs = "6.0.0"
+dirs = "7.0.0"
 glow = "0.17.0"
 image = "0.25.10"
 jwalk = "0.8.1"
